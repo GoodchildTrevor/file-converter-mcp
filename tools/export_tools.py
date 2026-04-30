@@ -19,13 +19,10 @@ async def export_text_file(
 ) -> dict[str, Any]:
     """Export text or structured content to a file.
 
-    Args:
-        text: Plain text string or list of content objects.
-        filename: Optional output filename (extension may be overridden by format).
-        format: One of: txt, md, html, json, xml, docx, pptx, xlsx, pdf.
-
-    Returns:
-        {"url": "...", "path": "..."} on success, or {"error": {...}} on failure.
+    :param text: Plain text string or list of content objects.
+    :param filename: Optional output filename (extension may be overridden by format).
+    :param format: One of: txt, md, html, json, xml, docx, pptx, xlsx, pdf.
+    :returns: {"url": "...", "path": "..."} on success, or {"error": {...}} on failure.
     """
     try:
         fmt = ExportFormat(format.lower())
@@ -80,14 +77,11 @@ async def export_document(
 ) -> dict[str, Any]:
     """Export tabular data to a document file.
 
-    Args:
-        data: 2-D array of strings representing table rows.
-        filename: Optional output filename.
-        format: One of: csv, xlsx, docx, pptx.
-        title: Optional document title.
-
-    Returns:
-        {"url": "...", "path": "..."} on success, or {"error": {...}} on failure.
+    :param data: 2-D array of strings representing table rows.
+    :param filename: Optional output filename.
+    :param format: One of: csv, xlsx, docx, pptx.
+    :param title: Optional document title.
+    :returns: {"url": "...", "path": "..."} on success, or {"error": {...}} on failure.
     """
     try:
         if format == "csv":

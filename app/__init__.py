@@ -8,6 +8,10 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+import tools.export_tools   # noqa: F401, E402
+import tools.fs_tools       # noqa: F401, E402
+import tools.archive_tools  # noqa: F401, E402
+import tools.owui_tools     # noqa: F401, E402
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -27,7 +31,7 @@ async def lifespan(app: Any):
     TemplateRegistry.init(settings.DOCS_TEMPLATE_PATH)
 
     app.state.http = httpx.AsyncClient(
-        timeout=settings.TOOL_REQUEST_TIMEOUT_SECONDS,
+        timeout=settings.HTTP_TIMEOUT,
         headers={"User-Agent": "mcp-client/1.0"},
     )
 
@@ -45,10 +49,3 @@ mcp = FastMCP(
     ),
     lifespan=lifespan,
 )
-
-# ── Register tool groups ─────────────────────────────────────────────────────
-# Import side-effects register @mcp.tool() decorators.
-import tools.export_tools   # noqa: F401, E402
-import tools.fs_tools       # noqa: F401, E402
-import tools.archive_tools  # noqa: F401, E402
-import tools.owui_tools     # noqa: F401, E402

@@ -5,6 +5,10 @@ from typing import Any
 
 from app import mcp, settings
 from app.core.models import ExportError
+from storage.paths import is_safe_path
+from storage.files import delete_file as _delete
+from storage.files import write_text
+from storage.paths import new_export_folder
 
 
 @mcp.tool()
@@ -15,17 +19,14 @@ async def save_file(
 ) -> dict[str, Any]:
     """Save a raw string to a file in the output directory.
 
-    Args:
-        content: String content to save.
-        filename: Output filename (with extension).
-        folder_path: Optional existing subfolder path; new folder created if None.
+    :param content: String content to save.
+    :param filename: Output filename (with extension).
+    :param folder_path: Optional existing subfolder path; new folder created if None.
     """
     try:
-        from storage.files import write_text
-        from storage.paths import new_export_folder
+        
         import os
         ext = os.path.splitext(filename)[1].lstrip(".") or "txt"
-        # If folder_path provided, write there; otherwise create a new folder
         if folder_path:
             from storage.paths import resolve_output_path, public_url
             from app.core.models import FileRef
@@ -46,8 +47,7 @@ async def save_file(
 async def list_files(folder_path: str | None = None) -> dict[str, Any]:
     """List files in an output folder.
 
-    Args:
-        folder_path: Folder to list. If None, lists the export root directory.
+    :param folder_path: Folder to list. If None, lists the export root directory.
     """
     try:
         from storage.files import list_folder
@@ -64,11 +64,11 @@ async def list_files(folder_path: str | None = None) -> dict[str, Any]:
 async def delete_file(filepath: str) -> dict[str, Any]:
     """Delete a generated file.
 
-    Args:
-        filepath: Absolute path to the file (must be inside the export directory).
+    :param filepath: Absolute path to the file (must be inside the export directory).
     """
     try:
-        from storage.files import delete_file as _delete
+        if not is_safe_path(filepath):
+            return ExportError(message="Path outside export directory", code="FORBIDDEN").to_dict()
         _delete(filepath)
         return {"success": True, "deleted": filepath}
     except ExportError as exc:

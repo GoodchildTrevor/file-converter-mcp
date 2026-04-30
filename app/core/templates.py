@@ -59,7 +59,6 @@ class TemplateRegistry:
             else:
                 log.warning("Template not found [%s]: %s", fmt, candidate)
 
-        # Fallback: find any matching file
         for fmt in list(cls._paths):
             if cls._paths[fmt] is None:
                 cls._find_any(base, fmt)

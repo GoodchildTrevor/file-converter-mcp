@@ -1,7 +1,4 @@
 """MCP tools: create_archive, cleanup_old_files.
-
-TODO: Copy archive logic from old repo:
-  - file_export_mcp.py → create_archive() (zip/tar/tar.gz/7z branches)
 """
 from __future__ import annotations
 
@@ -28,13 +25,10 @@ async def create_archive(
 ) -> dict[str, Any]:
     """Pack multiple files into an archive.
 
-    Args:
-        files: List of absolute file paths to include.
-        archive_name: Optional archive filename.
-        format: One of: zip, tar, tar.gz, 7z.
-
-    Returns:
-        {"url": "...", "path": "...", "files": N}
+    :param files: List of absolute file paths to include.
+    :param archive_name: Optional archive filename.
+    :param format: One of: zip, tar, tar.gz, 7z.
+    :returns: {"url": "...", "path": "...", "files": N}
     """
     if not files:
         return ExportError(message="No files specified").to_dict()
@@ -86,8 +80,7 @@ async def create_archive(
 def cleanup_old_files(max_age_seconds: int | None = None) -> dict[str, Any]:
     """Remove generated files older than *max_age_seconds*.
 
-    Args:
-        max_age_seconds: Age threshold in seconds. Defaults to FILES_DELAY env var.
+    :param max_age_seconds: Age threshold in seconds. Defaults to FILES_DELAY env var.
     """
     if settings.PERSISTENT_FILES:
         return {"message": "Cleanup disabled — PERSISTENT_FILES=true"}

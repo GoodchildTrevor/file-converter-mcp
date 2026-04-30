@@ -54,8 +54,7 @@ def _create_excel(
         fname = filename
     else:
         filepath, fname = _generate_filename(folder_path, "xlsx")
-
-    # Determine which template to use
+        
     wb = None
     
     if template_obj is not None:
