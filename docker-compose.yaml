@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  file-converter-mcp:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - output_files:/output
+    env_file:
+      - .env
+
+  # Optional: static file server to serve /output over HTTP
+  # Uncomment if you need FILE_EXPORT_BASE_URL to resolve publicly.
+  #
+  # file-server:
+  #   image: halverneus/static-file-server:latest
+  #   volumes:
+  #     - output_files:/web/files:ro
+  #   ports:
+  #     - "9003:8080"
+
+volumes:
+  output_files:
