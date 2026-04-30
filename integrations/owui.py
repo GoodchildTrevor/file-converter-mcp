@@ -1,9 +1,4 @@
 """OpenWebUI HTTP client.
-
-TODO: Copy logic from old repo:
-  - file_export_mcp.py → upload_file(), download_file()
-
-All HTTP goes through this module. No other module should call OpenWebUI directly.
 """
 from __future__ import annotations
 
@@ -56,3 +51,31 @@ def resolve_token(mcpo_headers: dict | None) -> str | None:
     if secret:
         log.warning("No user token in headers — falling back to JWT_SECRET")
     return secret or None
+
+
+async def upload_file(file_path: str, filename: str, file_type: str, token: str) -> dict:
+    """Upload a file to OpenWebUI server.
+    
+    :param file_path: Path to the file to upload
+    :param filename: Filename to use on the server
+    :param file_type: Type of file (for display)
+    :param token: Authorization token   
+    :returns: dict with download URL or error
+    """
+    url = f"{URL}/api/v1/files/"
+    headers = {
+        'Authorization': token,
+        'Accept': 'application/json'
+    }
+
+    async with httpx.AsyncClient() as client:
+        with open(file_path, 'rb') as f:
+            files = {'file': f}
+            response = await client.post(url, headers=headers, files=files)
+
+    if response.status_code != 200:
+        return {"error": {"message": f'Error uploading file: {response.status_code}'}}
+    else:
+        return {
+            "file_path_download": f"[Download {filename}.{file_type}](/api/v1/files/{response.json()['id']}/content)"
+        }

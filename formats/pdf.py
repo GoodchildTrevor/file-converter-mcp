@@ -1,12 +1,4 @@
 """PDF exporter.
-
-TODO: Copy logic from old repo:
-  - tools/file_export_mcp.py → _create_pdf()  (async)
-  - tools/pdf_renderer.py    → render_html_elements(), styles
-
-Fix that was needed in old code:
-  reportlab imports (Paragraph, SimpleDocTemplate) must be at module level,
-  not inside the function body.
 """
 from __future__ import annotations
 

@@ -1,16 +1,11 @@
 """PPTX exporter.
-
-TODO: Copy logic from old repo:
-  - tools/presentations.py → _create_presentation()
-
-Template path:
-  from app.core.templates import TemplateRegistry
-  template = TemplateRegistry.get("pptx")  # str | None
 """
 from __future__ import annotations
 
 from app.core.models import FileRef
 from app.core.templates import TemplateRegistry
+
+template = TemplateRegistry.get("pptx")  # str | None
 
 
 def export_pptx(
