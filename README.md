@@ -2,9 +2,6 @@
 
 MCP server for exporting and converting content to DOCX, PPTX, XLSX, PDF, CSV and other formats.
 
-Clean-room rewrite of [mcp-file-converter](https://github.com/GoodchildTrevor/mcp-file-converter)
-with a layered architecture.
-
 ## Architecture
 
 ```
