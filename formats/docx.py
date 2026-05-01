@@ -1,222 +1,188 @@
-"""DOCX exporter.
-"""
+"""DOCX exporter."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt
 
 from app.core.models import FileRef
 from app.core.templates import TemplateRegistry
 from storage.paths import new_export_folder, public_url, resolve_output_path
 
 log = logging.getLogger(__name__)
-log.debug("DOCX exporter initialized")
-
-
-def _convert_markdown_to_structured(content: str) -> list[dict]:
-    return [{"type": "paragraph", "text": line} for line in content.splitlines() if line.strip()]
 
 
 def _normalize_content(content: list[dict] | str) -> list[dict]:
+    """Normalize content to a list of structured dicts."""
     if isinstance(content, str):
-        return _convert_markdown_to_structured(content)
+        return [
+            {"type": "paragraph", "text": line}
+            for line in content.splitlines()
+            if line.strip()
+        ]
     if isinstance(content, list):
         return content
     return []
 
 
-def _process_docx_template(template_path: str, replacements: dict[str, str]) -> Any:
-    doc = Document(template_path)
+def _load_document(template_path: str | None) -> Any:
+    """Load a style template or create an empty document.
+
+    Clears all content from the template so we start with a blank
+    slate but retain the style definitions.
+    """
+    if not template_path:
+        return Document()
+
+    try:
+        doc = Document(template_path)
+        body = doc.element.body
+        for child in list(body):
+            if child.tag.endswith("}sectPr"):
+                continue
+            body.remove(child)
+        return doc
+    except Exception:
+        log.exception("Failed to load DOCX style template '%s'; falling back to blank document", template_path)
+        return Document()
+
+
+def _process_template_replacements(template_path: str | None, replacements: dict[str, str]) -> Any:
+    """Open a template file and replace placeholder tokens with values."""
+    if not template_path:
+        log.warning("No 'docx' template registered; using empty document for template-fill mode")
+        doc = Document()
+    else:
+        try:
+            doc = Document(template_path)
+        except Exception:
+            log.exception("Failed to open DOCX template '%s'", template_path)
+            doc = Document()
+
     for paragraph in doc.paragraphs:
         for key, value in replacements.items():
             if key in paragraph.text:
-                paragraph.text = paragraph.text.replace(str(key), str(value))
+                # Replace while preserving the first run's formatting.
+                if paragraph.runs:
+                    paragraph.runs[0].text = paragraph.text.replace(key, str(value))
+                    for run in paragraph.runs[1:]:
+                        run.text = ""
+                else:
+                    paragraph.text = paragraph.text.replace(key, str(value))
+
     return doc
 
 
-def _load_style_template(template_path: str) -> Any:
-    doc = Document(template_path)
-    for paragraph in doc.paragraphs[:]:
-        for run in paragraph.runs:
-            run.text = ""
-    return doc
+def _render_title(doc: Any, item: dict) -> None:
+    p = doc.add_paragraph(item.get("text", ""))
+    try:
+        p.style = doc.styles["Heading 1"]
+    except KeyError:
+        run = p.runs[0] if p.runs else p.add_run(item.get("text", ""))
+        run.font.size = Pt(18)
+        run.font.bold = True
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
-def _maybe_apply_title(
-    *, 
-    doc: Any, 
-    title: str | None, 
-    use_template: Optional[str], 
-    process_as_template: bool
-) -> None:
-    if not title or process_as_template:
+def _render_subtitle(doc: Any, item: dict) -> None:
+    p = doc.add_paragraph(item.get("text", ""))
+    try:
+        p.style = doc.styles["Heading 2"]
+    except KeyError:
+        run = p.runs[0] if p.runs else p.add_run(item.get("text", ""))
+        run.font.size = Pt(14)
+        run.font.bold = True
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
+def _render_heading(doc: Any, item: dict) -> None:
+    level = item.get("level", 1)
+    if level == 1:
+        _render_title(doc, item)
+    elif level == 2:
+        _render_subtitle(doc, item)
+    else:
+        p = doc.add_paragraph(item.get("text", ""))
+        style_name = f"Heading {min(level, 9)}"
+        try:
+            p.style = doc.styles[style_name]
+        except KeyError:
+            run = p.runs[0] if p.runs else p.add_run(item.get("text", ""))
+            run.font.bold = True
+
+
+def _render_paragraph(doc: Any, item: dict) -> None:
+    p = doc.add_paragraph(item.get("text", ""))
+    try:
+        p.style = doc.styles["Normal"]
+    except KeyError:
+        pass
+
+
+def _render_list(doc: Any, item: dict) -> None:
+    for text in item.get("items", []):
+        p = doc.add_paragraph(str(text))
+        for style_name in ("List Bullet", "List Paragraph", "Normal"):
+            try:
+                p.style = doc.styles[style_name]
+                break
+            except KeyError:
+                continue
+
+
+def _render_table(doc: Any, item: dict) -> None:
+    data = item.get("data", [])
+    if not data:
         return
 
-    title_added = False
-    if use_template:
-        for paragraph in doc.paragraphs:
-            if paragraph.style.name == "Title" or "Title" in paragraph.style.name:
-                paragraph.text = title
-                title_added = True
-                break
+    cols = max(len(row) for row in data)
+    table = doc.add_table(rows=len(data), cols=cols)
 
-    if not title_added:
-        title_paragraph = doc.add_paragraph(title)
-        try:
-            title_paragraph.style = doc.styles["Title"]
-        except KeyError:
-            try:
-                title_paragraph.style = doc.styles["Heading 1"]
-            except KeyError:
-                run = title_paragraph.runs[0] if title_paragraph.runs else title_paragraph.add_run()
-                run.font.size = 20
-                run.font.bold = True
-        title_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for i, row in enumerate(data):
+        for j, cell_value in enumerate(row):
+            cell = table.cell(i, j)
+            cell.text = str(cell_value)
+            if i == 0:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        run.font.bold = True
+                    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
-def _append_content(
-    *, 
-    doc: Any, 
-    content: list[dict], 
-    use_template: Optional[str], 
-    log: logging.Logger
-) -> None:
-    last_usable_paragraph = None
-    if doc.paragraphs:
-        for paragraph in reversed(doc.paragraphs):
-            if not paragraph.text.strip():
-                last_usable_paragraph = paragraph
-                break
+_RENDERERS = {
+    "title": _render_title,
+    "subtitle": _render_subtitle,
+    "heading": _render_heading,
+    "paragraph": _render_paragraph,
+    "list": _render_list,
+    "table": _render_table,
+}
 
-    for item in content or []:
+
+def _append_content(doc: Any, content: list[dict]) -> None:
+    """Append structured content items to the document."""
+    for item in content:
         if isinstance(item, str):
-            last_usable_paragraph = _render_paragraph_item(
-                doc=doc,
-                item={"type": "paragraph", "text": item},
-                use_template=use_template,
-                last_usable_paragraph=last_usable_paragraph,
-                log=log,
-            )
+            _render_paragraph(doc, {"text": item})
             continue
         if not isinstance(item, dict):
             continue
 
         item_type = item.get("type")
+
         if item_type == "image_query":
-            log.warning("image_query is not supported in current DOCX exporter")
+            log.warning("image_query items are not supported in the DOCX exporter — skipped")
             continue
 
-        renderer = {
-            "title": _render_title_item,
-            "subtitle": _render_subtitle_item,
-            "heading": _render_heading_item,
-            "paragraph": _render_paragraph_item,
-            "list": _render_list_item,
-            "table": _render_table_item,
-        }.get(item_type, _render_text_fallback_item)
-
-        last_usable_paragraph = renderer(
-            doc=doc,
-            item=item,
-            use_template=use_template,
-            last_usable_paragraph=last_usable_paragraph,
-            log=log,
-        )
-
-
-def _render_title_item(*, doc, item, use_template, last_usable_paragraph, log) -> Any:
-    paragraph = doc.add_paragraph(item.get("text", ""))
-    try:
-        paragraph.style = doc.styles["Heading 1"]
-    except KeyError:
-        run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
-        run.font.size = 18
-        run.font.bold = True
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    return last_usable_paragraph
-
-
-def _render_subtitle_item(*, doc, item, use_template, last_usable_paragraph, log) -> Any:
-    paragraph = doc.add_paragraph(item.get("text", ""))
-    try:
-        paragraph.style = doc.styles["Heading 2"]
-    except KeyError:
-        run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
-        run.font.size = 16
-        run.font.bold = True
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    return last_usable_paragraph
-
-
-def _render_heading_item(*, doc, item, use_template, last_usable_paragraph, log) -> Any:
-    level = item.get("level")
-    if level == 1:
-        return _render_title_item(doc=doc, item=item, use_template=use_template, last_usable_paragraph=last_usable_paragraph, log=log)
-    if level == 2:
-        return _render_subtitle_item(doc=doc, item=item, use_template=use_template, last_usable_paragraph=last_usable_paragraph, log=log)
-    return _render_paragraph_item(doc=doc, item=item, use_template=use_template, last_usable_paragraph=last_usable_paragraph, log=log)
-
-
-def _apply_paragraph_style_if_needed(*, doc, paragraph, use_template) -> None:
-    if not use_template:
-        return
-    try:
-        paragraph.style = doc.styles["Normal"]
-    except Exception:
-        pass
-
-
-def _render_paragraph_item(*, doc, item, use_template, last_usable_paragraph, log) -> Any:
-    if last_usable_paragraph and not last_usable_paragraph.text.strip():
-        last_usable_paragraph.text = item.get("text", "")
-        return None
-    paragraph = doc.add_paragraph(item.get("text", ""))
-    _apply_paragraph_style_if_needed(doc=doc, paragraph=paragraph, use_template=use_template)
-    return last_usable_paragraph
-
-
-def _render_list_item(*, doc, item, use_template, last_usable_paragraph, log) -> Any:
-    for item_text in item.get("items", []):
-        paragraph = doc.add_paragraph(item_text)
-        try:
-            paragraph.style = doc.styles["List Bullet"]
-        except KeyError:
-            try:
-                paragraph.style = doc.styles["List Paragraph"]
-            except KeyError:
-                paragraph.style = doc.styles["Normal"]
-    return last_usable_paragraph
-
-
-def _render_table_item(*, doc, item, use_template, last_usable_paragraph, log) -> Any:
-    data = item.get("data", [])
-    if not data:
-        return last_usable_paragraph
-    table = doc.add_table(rows=len(data), cols=len(data[0]) if data else 0)
-    for i, row in enumerate(data):
-        for j, cell in enumerate(row):
-            cell_obj = table.cell(i, j)
-            cell_obj.text = str(cell)
-            if i == 0:
-                for paragraph in cell_obj.paragraphs:
-                    for run in paragraph.runs:
-                        run.font.bold = True
-                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    return last_usable_paragraph
-
-
-def _render_text_fallback_item(*, doc, item, use_template, last_usable_paragraph, log) -> Any:
-    if "text" not in item:
-        return last_usable_paragraph
-    if last_usable_paragraph and not last_usable_paragraph.text.strip():
-        last_usable_paragraph.text = item["text"]
-        return None
-    paragraph = doc.add_paragraph(item["text"])
-    _apply_paragraph_style_if_needed(doc=doc, paragraph=paragraph, use_template=use_template)
-    return last_usable_paragraph
+        renderer = _RENDERERS.get(item_type)
+        if renderer:
+            renderer(doc, item)
+        elif "text" in item:
+            # Unknown type but has text — treat as paragraph.
+            _render_paragraph(doc, item)
 
 
 def export_docx(
@@ -224,44 +190,30 @@ def export_docx(
     filename: str | None,
     template_vars: dict[str, str] | None = None,
 ) -> FileRef:
-    """Export *content* as a Word document.
+    """Export *content* as a Word document and return a FileRef.
 
-    :param content: Structured content list or markdown string.
-    :param filename: Output filename.
-    :param template_vars: Placeholder → value mapping for template-fill mode.
-    :return: FileRef with url and path.
+    :param content: Structured content list or plain markdown string.
+    :param filename: Desired output filename (extension added if missing).
+    :param template_vars: When provided, opens the registered DOCX template
+        and performs placeholder substitution instead of building the document
+        from *content*.
+    :return: FileRef with url, path, and name.
     """
     folder = new_export_folder()
     filepath, fname = resolve_output_path(folder, filename or "", "docx")
     url = public_url(folder, fname)
 
-    process_as_template = bool(template_vars and isinstance(template_vars, dict))
-    replacements: dict[str, str] = template_vars if process_as_template else {}
     template_path = TemplateRegistry.get("docx")
 
-    if process_as_template and replacements:
-        if template_path:
-            doc = _process_docx_template(template_path, replacements)
-        else:
-            log.warning("TemplateRegistry has no 'docx' template; using empty document")
-            doc = Document()
+    # --- Template-fill mode ---
+    if template_vars:
+        doc = _process_template_replacements(template_path, template_vars)
         doc.save(filepath)
         return FileRef(url=url, path=filepath, name=fname)
 
-    if template_path:
-        try:
-            doc = _load_style_template(template_path)
-        except Exception:
-            log.exception("Failed to load style template")
-            doc = Document()
-    else:
-        doc = Document()
-
-    _maybe_apply_title(doc=doc, title=None, use_template=None, process_as_template=False)
-
-    structured = _normalize_content(content)
-    _append_content(doc=doc, content=structured, use_template=None, log=log)
-
+    # --- Content-build mode ---
+    doc = _load_document(template_path)
+    _append_content(doc, _normalize_content(content))
     doc.save(filepath)
     return FileRef(url=url, path=filepath, name=fname)
 
@@ -272,41 +224,7 @@ def _create_docx(
     folder_path: str | None = None,
     template_vars: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Create a DOCX file and return a dict compatible with other _create_* helpers.
-
-    Note: other exporters in this project expose a public export_* function and an
-    internal _create_* function returning {"url", "path"}.
-    """
-    folder = folder_path or new_export_folder()
-    filepath, fname = resolve_output_path(folder, filename or "", "docx")
-    url = public_url(folder, fname)
-
-    process_as_template = bool(template_vars and isinstance(template_vars, dict))
-    replacements: dict[str, str] = template_vars if process_as_template else {}
-    template_path = TemplateRegistry.get("docx")
-
-    if process_as_template and replacements:
-        if template_path:
-            doc = _process_docx_template(template_path, replacements)
-        else:
-            log.warning("TemplateRegistry has no 'docx' template; using empty document")
-            doc = Document()
-        doc.save(filepath)
-        return {"url": url, "path": filepath}
-
-    if template_path:
-        try:
-            doc = _load_style_template(template_path)
-        except Exception:
-            log.exception("Failed to load style template")
-            doc = Document()
-    else:
-        doc = Document()
-
-    _maybe_apply_title(doc=doc, title=None, use_template=None, process_as_template=False)
-
-    structured = _normalize_content(content)
-    _append_content(doc=doc, content=structured, use_template=None, log=log)
-
-    doc.save(filepath)
-    return {"url": url, "path": filepath}
+    """Legacy helper returning ``{"url", "path"}`` — delegates to export_docx."""
+    ref = export_docx(content=content, filename=filename, template_vars=template_vars)
+    return {"url": ref.url, "path": ref.path}
+    
