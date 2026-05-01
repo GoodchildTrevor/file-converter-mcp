@@ -1,20 +1,29 @@
 """Bearer token authentication middleware."""
 from __future__ import annotations
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
+from __future__ import annotations
+from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.responses import JSONResponse
 
 
-class BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Reject requests that do not carry a valid Bearer token."""
+class BearerAuthMiddleware:
+    """Pure ASGI Bearer token middleware — не использует BaseHTTPMiddleware."""
 
-    def __init__(self, app, token: str) -> None:
-        super().__init__(app)
+    def __init__(self, app: ASGIApp, token: str) -> None:
+        self.app = app
         self._token = token
 
-    async def dispatch(self, request: Request, call_next):
-        auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {self._token}":
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-        return await call_next(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "lifespan":
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers", []))
+            auth = headers.get(b"authorization", b"").decode()
+            if auth != f"Bearer {self._token}":
+                response = JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                await response(scope, receive, send)
+                return
+
+        await self.app(scope, receive, send)
