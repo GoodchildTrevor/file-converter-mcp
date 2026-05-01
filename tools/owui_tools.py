@@ -48,7 +48,12 @@ async def download_from_owui(
     mcpo_headers: dict | None = None,
     token: str | None = None,
 ) -> dict[str, Any]:
+    """Download a file from OpenWebUI and optionally save it to export storage."""
     try:
+        import os
+        from integrations.owui import download, resolve_token
+        from storage.paths import resolve_output_path, new_export_folder, public_url, is_safe_path
+        from app.core.models import ExportError, FileRef
 
         resolved = token or resolve_token(mcpo_headers)
         if not resolved:
@@ -59,14 +64,41 @@ async def download_from_owui(
 
         data = await download(file_id, resolved)
 
-        buffer = data.getvalue()
+        buf = data.getbuffer()
+        size = buf.nbytes
 
-        if save_path:
-            with open(save_path, "wb") as f:
-                f.write(buffer)
-            return {"success": True, "path": save_path, "size": len(buffer)}
+        if not save_path:
+            return {"success": True, "size": size}
 
-        return {"success": True, "size": len(buffer)}
+        filename = os.path.basename(save_path)
+
+        ext = os.path.splitext(filename)[1].lstrip(".") or "bin"
+
+        folder = new_export_folder()
+
+        filepath, fname = resolve_output_path(folder, filename, ext)
+
+        if not is_safe_path(filepath):
+            return ExportError(
+                message="Unsafe save path",
+                code="FORBIDDEN"
+            ).to_dict()
+
+        with open(filepath, "wb") as f:
+            f.write(buf)
+
+        ref = FileRef(
+            path=filepath,
+            name=fname,
+            url=public_url(folder, fname),
+        )
+
+        return {
+            "success": True,
+            "path": ref.path,
+            "url": ref.url,
+            "size": size,
+        }
 
     except ExportError as exc:
         return exc.to_dict()
@@ -76,4 +108,7 @@ async def download_from_owui(
             code="NOT_IMPLEMENTED"
         ).to_dict()
     except Exception as exc:
-        return ExportError(message=str(exc)).to_dict()
+        return ExportError(
+            message=str(exc),
+            code="INTERNAL_ERROR"
+        ).to_dict()

@@ -35,50 +35,58 @@ async def create_archive(
         return ExportError(message="No files specified").to_dict()
 
     try:
-        fmt = ArchiveFormat(format)
+        fmt = ArchiveFormat(format.lower())
     except ValueError:
-        return ExportError(message=f"Unsupported archive format: {format}").to_dict()
+        return ExportError(
+            message=f"Unsupported archive format: {format}"
+        ).to_dict()
 
     folder = new_export_folder()
     name = os.path.basename(archive_name) if archive_name else f"archive.{format}"
     archive_path = os.path.join(folder, name)
 
+    safe_files = [
+        fp for fp in files
+        if os.path.exists(fp) and is_safe_path(fp)
+    ]
+
+    if not safe_files:
+        return ExportError(
+            message="No valid files to archive"
+        ).to_dict()
+
     try:
         if fmt == ArchiveFormat.ZIP:
             with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for fp in files:
-                    if os.path.exists(fp):
-                        zf.write(fp, os.path.basename(fp))
+                for fp in safe_files:
+                    zf.write(fp, os.path.basename(fp))
 
         elif fmt == ArchiveFormat.TAR:
             with tarfile.open(archive_path, "w") as tf:
-                for fp in files:
-                    if os.path.exists(fp):
-                        tf.add(fp, os.path.basename(fp))
+                for fp in safe_files:
+                    tf.add(fp, os.path.basename(fp))
 
         elif fmt == ArchiveFormat.TAR_GZ:
             with tarfile.open(archive_path, "w:gz") as tf:
-                for fp in files:
-                    if os.path.exists(fp):
-                        tf.add(fp, os.path.basename(fp))
+                for fp in safe_files:
+                    tf.add(fp, os.path.basename(fp))
 
         elif fmt == ArchiveFormat.SEVEN_Z:
             with py7zr.SevenZipFile(archive_path, "w") as szf:
-                for fp in files:
-                    if os.path.exists(fp):
-                        szf.write(fp, os.path.basename(fp))
+                for fp in safe_files:
+                    szf.write(fp, os.path.basename(fp))
 
         return {
             "url": public_url(folder, name),
             "path": archive_path,
-            "files": len(files),
+            "files": len(safe_files),
         }
     except Exception as exc:
         return ExportError(message=str(exc)).to_dict()
 
 
 @mcp.tool()
-def cleanup_old_files(max_age_seconds: int | None = None) -> dict[str, Any]:
+async def cleanup_old_files(max_age_seconds: int | None = None) -> dict[str, Any]:
     """Remove generated files older than *max_age_seconds*.
 
     :param max_age_seconds: Age threshold in seconds. Defaults to FILES_DELAY env var.
