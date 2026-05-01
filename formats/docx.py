@@ -264,3 +264,49 @@ def export_docx(
 
     doc.save(filepath)
     return FileRef(url=url, path=filepath, name=fname)
+
+
+def _create_docx(
+    content: list[dict] | str,
+    filename: str,
+    folder_path: str | None = None,
+    template_vars: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Create a DOCX file and return a dict compatible with other _create_* helpers.
+
+    Note: other exporters in this project expose a public export_* function and an
+    internal _create_* function returning {"url", "path"}.
+    """
+    folder = folder_path or new_export_folder()
+    filepath, fname = resolve_output_path(folder, filename or "", "docx")
+    url = public_url(folder, fname)
+
+    process_as_template = bool(template_vars and isinstance(template_vars, dict))
+    replacements: dict[str, str] = template_vars if process_as_template else {}
+    template_path = TemplateRegistry.get("docx")
+
+    if process_as_template and replacements:
+        if template_path:
+            doc = _process_docx_template(template_path, replacements)
+        else:
+            log.warning("TemplateRegistry has no 'docx' template; using empty document")
+            doc = Document()
+        doc.save(filepath)
+        return {"url": url, "path": filepath}
+
+    if template_path:
+        try:
+            doc = _load_style_template(template_path)
+        except Exception:
+            log.exception("Failed to load style template")
+            doc = Document()
+    else:
+        doc = Document()
+
+    _maybe_apply_title(doc=doc, title=None, use_template=None, process_as_template=False)
+
+    structured = _normalize_content(content)
+    _append_content(doc=doc, content=structured, use_template=None, log=log)
+
+    doc.save(filepath)
+    return {"url": url, "path": filepath}
