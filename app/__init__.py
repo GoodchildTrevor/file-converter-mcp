@@ -7,11 +7,6 @@ import httpx
 from typing import Any
 
 from fastmcp import FastMCP
-
-import tools.export_tools   # noqa: F401, E402
-import tools.fs_tools       # noqa: F401, E402
-import tools.archive_tools  # noqa: F401, E402
-import tools.owui_tools     # noqa: F401, E402
 from app.core.config import get_settings
 
 settings = get_settings()
