@@ -8,6 +8,8 @@ from typing import Any
 
 from fastmcp import FastMCP
 from app.core.config import get_settings
+from app.core.templates import TemplateRegistry
+from storage.paths import ensure_export_dir
 
 settings = get_settings()
 logging.basicConfig(
@@ -19,22 +21,22 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: Any):
-    from storage.paths import ensure_export_dir
-    from app.core.templates import TemplateRegistry
 
     ensure_export_dir(settings.FILE_EXPORT_DIR)
     TemplateRegistry.init(settings.DOCS_TEMPLATE_PATH)
 
-    app.state.http = httpx.AsyncClient(
+    http_client = httpx.AsyncClient(
         timeout=settings.HTTP_TIMEOUT,
         headers={"User-Agent": "mcp-client/1.0"},
     )
 
-    log.info("file-converter-mcp started (v%s)", settings.VERSION)
-    yield
+    try:
+        yield
+    finally:
+        if http_client is not None:
+            await http_client.aclose()
+        http_client = None
 
-    await app.state.http.aclose()
-    log.info("file-converter-mcp stopped")
 
 mcp = FastMCP(
     name="file-converter-mcp",
