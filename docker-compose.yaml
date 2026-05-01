@@ -6,7 +6,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - output_files:/output
+      - export-data:/output
     env_file:
       - .env
 
@@ -23,4 +23,4 @@ services:
       - export-data:/output
 
 volumes:
-  output_files:
+  export-data:
