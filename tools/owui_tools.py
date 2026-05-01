@@ -6,6 +6,7 @@ from typing import Any
 
 from app import mcp
 from app.core.models import ExportError
+from integrations.owui import download, upload, resolve_token
 
 
 @mcp.tool()
@@ -25,7 +26,6 @@ async def upload_to_owui(
         {"file_path_download": "[Download ...](...)"}  or  {"error": {...}}
     """
     try:
-        from integrations.owui import upload, resolve_token
         resolved = token or resolve_token(mcpo_headers)
         if not resolved:
             return ExportError(message="No authorization token provided", code="AUTH_ERROR").to_dict()
@@ -48,31 +48,32 @@ async def download_from_owui(
     mcpo_headers: dict | None = None,
     token: str | None = None,
 ) -> dict[str, Any]:
-    """Download a file from OpenWebUI.
-
-    Args:
-        file_id: OpenWebUI file ID.
-        save_path: Optional path to save the downloaded file.
-        mcpo_headers: MCP session headers.
-        token: Explicit token override.
-
-    Returns:
-        {"success": True, "path": "..."} or {"error": {...}}
-    """
     try:
-        from integrations.owui import download, resolve_token
+
         resolved = token or resolve_token(mcpo_headers)
         if not resolved:
-            return ExportError(message="No authorization token provided", code="AUTH_ERROR").to_dict()
+            return ExportError(
+                message="No authorization token provided",
+                code="AUTH_ERROR"
+            ).to_dict()
+
         data = await download(file_id, resolved)
+
+        buffer = data.getvalue()
+
         if save_path:
             with open(save_path, "wb") as f:
-                f.write(data.getvalue())
-            return {"success": True, "path": save_path}
-        return {"success": True, "size": len(data.getvalue())}
+                f.write(buffer)
+            return {"success": True, "path": save_path, "size": len(buffer)}
+
+        return {"success": True, "size": len(buffer)}
+
     except ExportError as exc:
         return exc.to_dict()
     except NotImplementedError as exc:
-        return ExportError(message=str(exc), code="NOT_IMPLEMENTED").to_dict()
+        return ExportError(
+            message=str(exc),
+            code="NOT_IMPLEMENTED"
+        ).to_dict()
     except Exception as exc:
         return ExportError(message=str(exc)).to_dict()

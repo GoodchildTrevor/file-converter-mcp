@@ -12,6 +12,7 @@ import py7zr
 
 from app import mcp, settings
 from app.core.models import ArchiveFormat, ExportError
+from storage.cleanup import cleanup_old_folders
 from storage.paths import new_export_folder, public_url
 
 log = logging.getLogger(__name__)
@@ -90,7 +91,6 @@ def cleanup_old_files(max_age_seconds: int | None = None) -> dict[str, Any]:
         return {"message": "Cleanup skipped — FILES_DELAY=0 (keep forever)"}
 
     try:
-        from storage.cleanup import cleanup_old_folders
         stats = cleanup_old_folders(age)
         return {"success": True, **stats}
     except Exception as exc:
