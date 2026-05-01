@@ -21,6 +21,8 @@ services:
       - "9003:9003"
     volumes:
       - export-data:/output
+    env_file:
+      - .env
 
 volumes:
   export-data:
