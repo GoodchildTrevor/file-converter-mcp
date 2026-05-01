@@ -17,13 +17,10 @@ async def upload_to_owui(
 ) -> dict[str, Any]:
     """Upload a generated file to OpenWebUI.
 
-    Args:
-        filepath: Absolute path to the file to upload.
-        mcpo_headers: MCP session headers (contains Authorization).
-        token: Explicit token override.
-
-    Returns:
-        {"file_path_download": "[Download ...](...)"}  or  {"error": {...}}
+    :param filepath: Absolute path to the file to upload.
+    :param mcpo_headers: MCP session headers (contains Authorization).
+    :param token: Explicit token override.
+    :returns: {"file_path_download": "[Download ...](...)"}  or  {"error": {...}}
     """
     try:
         resolved = token or resolve_token(mcpo_headers)

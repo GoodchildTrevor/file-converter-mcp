@@ -22,23 +22,25 @@ async def upload(file_path: str, filename: str, token: str) -> str:
     settings = get_settings()
     if not settings.OWUI_URL:
         raise ExportError(message="OWUI_URL is not configured", code="CONFIG_ERROR")
-    raise NotImplementedError(
-        "TODO: copy upload_file() from file_export_mcp.py"
-    )
+    return await upload_file(file_path, filename, token)
 
 
 async def download(file_id: str, token: str) -> BytesIO:
-    """Download a file from OpenWebUI and return its contents as BytesIO.
-
-    Raises:
-        ExportError: on non-200 response.
+    """
     """
     settings = get_settings()
     if not settings.OWUI_URL:
         raise ExportError(message="OWUI_URL is not configured", code="CONFIG_ERROR")
-    raise NotImplementedError(
-        "TODO: copy download_file() from file_export_mcp.py"
-    )
+    url = f"{settings.OWUI_URL}/api/v1/files/{file_id}/content"
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+    if response.status_code != 200:
+        raise ExportError(
+            message=f"OWUI download failed: {response.status_code}",
+            code="DOWNLOAD_ERROR",
+        )
+    return BytesIO(response.content)
 
 
 def resolve_token(mcpo_headers: dict | None) -> str | None:
@@ -62,20 +64,20 @@ async def upload_file(file_path: str, filename: str, file_type: str, token: str)
     :param token: Authorization token   
     :returns: dict with download URL or error
     """
-    url = f"{URL}/api/v1/files/"
+    settings = get_settings()
+    url = f"{settings.OWUI_URL}/api/v1/files/"
     headers = {
-        'Authorization': token,
-        'Accept': 'application/json'
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
     }
-
     async with httpx.AsyncClient() as client:
-        with open(file_path, 'rb') as f:
-            files = {'file': f}
-            response = await client.post(url, headers=headers, files=files)
+        with open(file_path, "rb") as f:
+            response = await client.post(url, headers=headers, files={"file": f})
 
     if response.status_code != 200:
-        return {"error": {"message": f'Error uploading file: {response.status_code}'}}
-    else:
-        return {
-            "file_path_download": f"[Download {filename}.{file_type}](/api/v1/files/{response.json()['id']}/content)"
-        }
+        raise ExportError(
+            message=f"OWUI upload failed: {response.status_code}",
+            code="UPLOAD_ERROR",
+        )
+    file_id = response.json()["id"]
+    return f"[Download {filename}]({settings.OWUI_URL}/api/v1/files/{file_id}/content)"
