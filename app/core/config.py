@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     # ── Service ───────────────────────────────────────────────────────────────
     VERSION: str = "1.0.0"
+    MCP_AUTH_TOKEN: str = ""
     LOG_LEVEL: str = "INFO"
 
     # ── Storage ───────────────────────────────────────────────────────────────
