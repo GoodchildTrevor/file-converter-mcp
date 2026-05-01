@@ -75,7 +75,6 @@ def _process_docx_template(template_path: str, replacements: dict[str, str]) -> 
     :param replacements: The replacements to make
     :return: A DOCX document
     """
-
     doc = Document(template_path)
     for paragraph in doc.paragraphs:
         for key, value in replacements.items():
@@ -210,7 +209,6 @@ def _render_title_item(
     :param last_usable_paragraph: The last usable paragraph
     :param log: The logger
     """
-
     paragraph = doc.add_paragraph(item.get("text", ""))
     try:
         paragraph.style = doc.styles["Heading 1"]
@@ -230,7 +228,6 @@ def _render_subtitle_item(
     last_usable_paragraph: Any, 
     log: logging.Logger
 ) -> Any:
-
     paragraph = doc.add_paragraph(item.get("text", ""))
     try:
         paragraph.style = doc.styles["Heading 2"]
@@ -266,9 +263,6 @@ def _apply_paragraph_style_if_needed(
     paragraph: Any, 
     use_template: Optional[str]
 ) -> None:
-    """
-    
-    """
     if not use_template:
         return
     try:
