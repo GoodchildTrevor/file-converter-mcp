@@ -65,7 +65,6 @@ def _process_template_replacements(template_path: str | None, replacements: dict
     for paragraph in doc.paragraphs:
         for key, value in replacements.items():
             if key in paragraph.text:
-                # Replace while preserving the first run's formatting.
                 if paragraph.runs:
                     paragraph.runs[0].text = paragraph.text.replace(key, str(value))
                     for run in paragraph.runs[1:]:
@@ -181,7 +180,6 @@ def _append_content(doc: Any, content: list[dict]) -> None:
         if renderer:
             renderer(doc, item)
         elif "text" in item:
-            # Unknown type but has text — treat as paragraph.
             _render_paragraph(doc, item)
 
 
@@ -205,13 +203,11 @@ def export_docx(
 
     template_path = TemplateRegistry.get("docx")
 
-    # --- Template-fill mode ---
     if template_vars:
         doc = _process_template_replacements(template_path, template_vars)
         doc.save(filepath)
         return FileRef(url=url, path=filepath, name=fname)
 
-    # --- Content-build mode ---
     doc = _load_document(template_path)
     _append_content(doc, _normalize_content(content))
     doc.save(filepath)
@@ -227,4 +223,3 @@ def _create_docx(
     """Legacy helper returning ``{"url", "path"}`` — delegates to export_docx."""
     ref = export_docx(content=content, filename=filename, template_vars=template_vars)
     return {"url": ref.url, "path": ref.path}
-    
