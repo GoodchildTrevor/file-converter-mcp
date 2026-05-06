@@ -25,10 +25,66 @@ async def export_text_file(
 ) -> dict[str, Any]:
     """Export text or structured content to a file.
 
-    :param text: Plain text string or list of content objects.
-    :param filename: Optional output filename (extension may be overridden by format).
-    :param format: One of: txt, md, html, json, xml, docx, pptx, xlsx, pdf.
-    :returns: {"url": "...", "path": "..."} on success, or {"error": {...}} on failure.
+    Use this tool when the user asks to save, export, or download content as a file.
+
+    :param format: Target file format. Choose based on content type:
+        - "txt"  — plain text, no formatting
+        - "md"   — Markdown text
+        - "html" — HTML markup string
+        - "json" — JSON string (pass serialized JSON as text)
+        - "xml"  — XML string
+        - "csv"  — tabular data; requires text to be a list of row-lists (see below)
+        - "docx" — Word document; requires text to be a list of content-block dicts (see below)
+        - "pdf"  — PDF; same structure as docx
+        - "pptx" — PowerPoint; same structure as docx
+        - "xlsx" — Excel spreadsheet; requires text to be a list of row-lists (see below)
+
+    :param filename: Optional output filename without path (e.g. "report.docx").
+        Extension is added automatically if missing. If omitted, a name is generated.
+
+    :param text: Content to export. Type depends on format:
+
+        FOR txt / md / html / json / xml — pass a plain Python string:
+            "Hello world"
+
+        FOR csv / xlsx — pass a list of rows, each row is a list of cell values.
+            First row is treated as the header:
+            [
+                ["Name", "Score", "Grade"],
+                ["Alice", 95, "A"],
+                ["Bob",   88, "B"],
+            ]
+
+        FOR docx / pdf / pptx — pass a FLAT list of content-block dicts.
+            Do NOT wrap blocks in an outer dict or add a "content" key around them.
+            Supported block types:
+
+            {"type": "heading",   "level": 1, "text": "Document title"}  # level 1–6
+            {"type": "heading",   "level": 2, "text": "Section heading"}
+            {"type": "paragraph", "text": "Body text goes here."}
+            {"type": "list",      "items": ["First item", "Second item", "Third item"]}
+            {"type": "table",     "data": [
+                ["Column A", "Column B"],   # first row = bold header
+                ["value 1",  "value 2"],
+            ]}
+
+            Full example — a docx with a title, intro, bullet list, and table:
+            [
+                {"type": "heading",   "level": 1, "text": "Q1 Sales Report"},
+                {"type": "paragraph", "text": "This report summarises Q1 performance."},
+                {"type": "list",      "items": ["Revenue up 12%", "Churn down 3%"]},
+                {"type": "table",     "data": [
+                    ["Region", "Revenue"],
+                    ["North",  "$120k"],
+                    ["South",  "$98k"],
+                ]},
+            ]
+
+            WRONG — never wrap in an outer object; this produces an empty file:
+            [{"title": "Report", "content": [...]}]   ← incorrect
+
+    :returns: {"url": "...", "path": "...", "name": "..."} on success,
+              or {"error": {"message": "...", "code": "..."}} on failure.
     """
     try:
         fmt = ExportFormat(format.lower())
@@ -76,7 +132,38 @@ async def export_document(
     format: str = "csv",
     title: str | None = None,
 ) -> dict[str, Any]:
+    """Export a two-dimensional table to a structured document.
 
+    Use this tool when the content is purely tabular (rows and columns) and the user
+    wants csv, xlsx, docx, or pptx output. For rich documents with headings, paragraphs,
+    and mixed content, use export_text_file instead.
+
+    :param data: A list of rows; each row is a list of cell values (str or coercible to str).
+        The first row is treated as the header / column names in all formats.
+        Example:
+            [
+                ["Name",  "Department", "Salary"],
+                ["Alice", "Engineering", "$120k"],
+                ["Bob",   "Marketing",   "$95k"],
+            ]
+
+    :param filename: Optional output filename without path (e.g. "employees.xlsx").
+        Extension is added automatically if missing.
+
+    :param format: Target file format. Supported values:
+        - "csv"  — comma-separated values (default)
+        - "xlsx" — Excel spreadsheet; pass title to set the sheet name
+        - "docx" — Word document; rows are rendered as a tab-separated plain-text table
+        - "pptx" — PowerPoint; each row becomes one slide
+                   (first cell = slide title, remaining cells = body text)
+
+    :param title: Optional title string.
+        For xlsx: used as the worksheet name.
+        Ignored for other formats.
+
+    :returns: {"url": "...", "path": "...", "name": "..."} on success,
+              or {"error": {"message": "...", "code": "..."}} on failure.
+    """
     try:
         fmt = ExportFormat(format.lower())
     except ValueError:
@@ -126,4 +213,3 @@ async def export_document(
             message=str(exc),
             code="INTERNAL_ERROR"
         ).to_dict()
-        
