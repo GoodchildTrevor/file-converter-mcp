@@ -25,7 +25,7 @@ async def lifespan(app: Any):
     ensure_export_dir(settings.FILE_EXPORT_DIR)
     TemplateRegistry.init(
         settings.DOCS_TEMPLATE_PATH,
-        settings.NAMED_TEMPLATES_PATH
+        settings.OWN_TEMPLATES_PATH
     )
 
     http_client = httpx.AsyncClient(

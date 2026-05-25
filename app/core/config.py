@@ -24,7 +24,8 @@ class Settings(BaseSettings):
     FILE_EXPORT_BASE_URL: str = "http://localhost:9003/files"
 
     # ── Templates (optional) ─────────────────────────────────────────────────
-    DOCS_TEMPLATE_PATH: str = ""
+    DOCS_TEMPLATE_PATH: str
+    OWN_TEMPLATES_PATH: str
 
     # ── OpenWebUI integration (optional) ─────────────────────────────────────
     OWUI_URL: str = ""
