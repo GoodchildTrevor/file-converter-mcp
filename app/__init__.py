@@ -23,7 +23,10 @@ log = logging.getLogger(__name__)
 async def lifespan(app: Any):
 
     ensure_export_dir(settings.FILE_EXPORT_DIR)
-    TemplateRegistry.init(settings.DOCS_TEMPLATE_PATH)
+    TemplateRegistry.init(
+        settings.DOCS_TEMPLATE_PATH,
+        settings.NAMED_TEMPLATES_PATH
+    )
 
     http_client = httpx.AsyncClient(
         timeout=settings.HTTP_TIMEOUT,
