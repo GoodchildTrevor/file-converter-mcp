@@ -21,6 +21,10 @@ class TemplateRegistry:
 
         TemplateRegistry.init(settings.DOCS_TEMPLATE_PATH)
         path = TemplateRegistry.get("docx")  # str | None
+
+    Or with a separate directory for named templates::
+
+        TemplateRegistry.init(settings.DOCS_TEMPLATE_PATH, settings.NAMED_TEMPLATES_PATH)
     """
 
     _paths: ClassVar[dict[str, str | None]] = {
@@ -33,34 +37,34 @@ class TemplateRegistry:
     _named: ClassVar[dict[str, dict]] = {}
 
     @classmethod
-    def init(cls, docs_template_path: str) -> None:
+    def init(cls, docs_template_path: str, named_path: str = "") -> None:
+        """Initialise the registry.
+
+        :param docs_template_path: Directory containing ``Default_Template.*`` files
+            used as base styles for generated documents.
+        :param named_path: Optional separate directory containing named ``.docx``
+            templates (with optional ``.json`` sidecar metadata).  When omitted,
+            named templates are loaded from ``docs_template_path`` instead
+            (backwards-compatible behaviour).
+        """
         cls._initialised = True
         base = docs_template_path.strip() if docs_template_path else ""
+        named = named_path.strip() if named_path else ""
 
-        if base and os.path.exists(base):
-            for f in os.listdir(base):
-                if f.lower().endswith(".docx") and f != "Default_Template.docx":
-                    name = os.path.splitext(f)[0].lower()
-                    docx_path = os.path.join(base, f)
+        # ── Named templates ──────────────────────────────────────────────────
+        # Prefer dedicated named_path; fall back to base for backwards compat.
+        named_dir = named if named else base
+        if named_dir and os.path.exists(named_dir):
+            cls._load_named(named_dir)
+        elif named_dir:
+            log.warning("NAMED_TEMPLATES_PATH does not exist: %s", named_dir)
 
-                    # Load sidecar JSON metadata if present
-                    json_path = os.path.join(base, f"{os.path.splitext(f)[0]}.json")
-                    meta: dict = {}
-                    if os.path.exists(json_path):
-                        try:
-                            with open(json_path, encoding="utf-8") as jf:
-                                meta = json.load(jf)
-                        except Exception:
-                            log.warning("Failed to load metadata for template '%s'", name)
-
-                    cls._named[name] = {"path": docx_path, "meta": meta}
-                    log.info("Named template registered [%s]: %s", name, docx_path)
-
+        # ── Default (style) templates ─────────────────────────────────────────
         if not base or not os.path.exists(base):
             if base:
                 log.warning("DOCS_TEMPLATE_PATH does not exist: %s", base)
             else:
-                log.info("DOCS_TEMPLATE_PATH not set — templates disabled")
+                log.info("DOCS_TEMPLATE_PATH not set — default templates disabled")
             return
 
         log.info("Scanning templates in: %s", base)
@@ -80,6 +84,48 @@ class TemplateRegistry:
         for fmt in list(cls._paths):
             if cls._paths[fmt] is None:
                 cls._find_any(base, fmt)
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    @classmethod
+    def _load_named(cls, directory: str) -> None:
+        """Scan *directory* for named ``.docx`` templates (skips Default_Template.docx)."""
+        for f in os.listdir(directory):
+            if not f.lower().endswith(".docx"):
+                continue
+            if f == "Default_Template.docx":
+                continue
+
+            name = os.path.splitext(f)[0].lower()
+            docx_path = os.path.join(directory, f)
+
+            meta: dict = {}
+            json_path = os.path.join(directory, f"{os.path.splitext(f)[0]}.json")
+            if os.path.exists(json_path):
+                try:
+                    with open(json_path, encoding="utf-8") as jf:
+                        meta = json.load(jf)
+                except Exception:
+                    log.warning("Failed to load metadata for template '%s'", name)
+
+            cls._named[name] = {"path": docx_path, "meta": meta}
+            log.info("Named template registered [%s]: %s", name, docx_path)
+
+    @classmethod
+    def _find_any(cls, base: str, fmt: str) -> None:
+        """Search for any template file matching the format.
+
+        :param base: Base directory to search in.
+        :param fmt: File format to search for (e.g. 'docx', 'pptx', 'xlsx').
+        """
+        for root, _, files in os.walk(base):
+            for f in files:
+                if f.lower().endswith(f".{fmt}"):
+                    cls._paths[fmt] = os.path.join(root, f)
+                    log.info("Template fallback found [%s]: %s", fmt, cls._paths[fmt])
+                    return
+
+    # ── Public API ────────────────────────────────────────────────────────────
 
     @classmethod
     def get_named(cls, name: str) -> str | None:
@@ -111,20 +157,6 @@ class TemplateRegistry:
                 "placeholders": meta.get("placeholders", {}),
             })
         return result
-
-    @classmethod
-    def _find_any(cls, base: str, fmt: str) -> None:
-        """Search for any template file matching the format.
-
-        :param base: Base directory to search in.
-        :param fmt: File format to search for (e.g. 'docx', 'pptx', 'xlsx').
-        """
-        for root, _, files in os.walk(base):
-            for f in files:
-                if f.lower().endswith(f".{fmt}"):
-                    cls._paths[fmt] = os.path.join(root, f)
-                    log.info("Template fallback found [%s]: %s", fmt, cls._paths[fmt])
-                    return
 
     @classmethod
     def get(cls, fmt: str) -> str | None:
