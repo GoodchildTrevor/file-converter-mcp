@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional 
+from typing import Any, Optional
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -50,8 +50,31 @@ def _load_document(template_path: str | None) -> Any:
         return Document()
 
 
+def _replace_in_paragraph(paragraph: Any, replacements: dict[str, str]) -> None:
+    """Replace {{key}} placeholders in a paragraph, handling split runs.
+
+    Word often splits a placeholder like {{Who}} across multiple runs
+    (e.g. "{{", "Who", "}}").  We read the full paragraph text, apply all
+    replacements, then write the result back into the first run and clear
+    the remaining runs — preserving the formatting of the first run.
+    """
+    full_text = paragraph.text
+    new_text = full_text
+    for key, value in replacements.items():
+        new_text = new_text.replace(f"{{{{{key}}}}}", str(value))
+    if new_text == full_text:
+        return
+    if paragraph.runs:
+        paragraph.runs[0].text = new_text
+        for run in paragraph.runs[1:]:
+            run.text = ""
+    else:
+        paragraph.clear()
+        paragraph.add_run(new_text)
+
+
 def _process_template_replacements(template_path: str | None, replacements: dict[str, str]) -> Any:
-    """Open a template file and replace placeholder tokens with values."""
+    """Open a named template file and replace {{key}} placeholders with values."""
     if not template_path:
         log.warning("No 'docx' template registered; using empty document for template-fill mode")
         doc = Document()
@@ -63,14 +86,13 @@ def _process_template_replacements(template_path: str | None, replacements: dict
             doc = Document()
 
     for paragraph in doc.paragraphs:
-        for key, value in replacements.items():
-            if key in paragraph.text:
-                if paragraph.runs:
-                    paragraph.runs[0].text = paragraph.text.replace(key, str(value))
-                    for run in paragraph.runs[1:]:
-                        run.text = ""
-                else:
-                    paragraph.text = paragraph.text.replace(key, str(value))
+        _replace_in_paragraph(paragraph, replacements)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    _replace_in_paragraph(paragraph, replacements)
 
     return doc
 
@@ -193,10 +215,10 @@ def export_docx(
 
     :param content: Structured content list or plain markdown string.
     :param filename: Desired output filename (extension added if missing).
-    :param template_vars: When provided, opens the registered DOCX template
-        and performs placeholder substitution instead of building the document
-        from *content*.
-    :param template_path: Optional path to a DOCX template file.
+    :param template_vars: When provided, opens the named DOCX template and
+        performs ``{{key}}`` placeholder substitution instead of building the
+        document from *content*.
+    :param template_path: Optional explicit path to a DOCX template file.
     :return: FileRef with url, path, and name.
     """
     folder = new_export_folder()
