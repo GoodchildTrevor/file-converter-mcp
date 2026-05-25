@@ -6,9 +6,6 @@ All work is delegated to formats/* modules.
 from __future__ import annotations
 
 from typing import Any, Optional
-import re
-from pathlib import Path
-from docx import Document
 
 from app import mcp
 from app.core.templates import TemplateRegistry
@@ -19,7 +16,6 @@ from formats.pdf import export_pdf
 from formats.pptx import export_pptx
 from formats.raw import export_raw
 from formats.xlsx import export_xlsx
-from storage.manager import StorageManager
 
 
 @mcp.tool()
