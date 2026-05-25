@@ -81,7 +81,7 @@ async def export_text_file(
             ]
 
             WRONG — never wrap in an outer object; this produces an empty file:
-            [{"title": "Report", "content": [...]}]   ← incorrect
+            [{"title": "Report", "content": [...]}]   <- incorrect
 
     :returns: {"url": "...", "path": "...", "name": "..."} on success,
               or {"error": {"message": "...", "code": "..."}} on failure.
@@ -153,7 +153,7 @@ async def export_document(
     :param format: Target file format. Supported values:
         - "csv"  — comma-separated values (default)
         - "xlsx" — Excel spreadsheet; pass title to set the sheet name
-        - "docx" — Word document; rows are rendered as a tab-separated plain-text table
+        - "docx" — Word document with a proper table (first row = bold header)
         - "pptx" — PowerPoint; each row becomes one slide
                    (first cell = slide title, remaining cells = body text)
 
@@ -180,10 +180,8 @@ async def export_document(
             return export_xlsx(data, filename, title=title).to_dict()
 
         elif fmt == ExportFormat.DOCX:
-            text = "\n".join(
-                ["\t".join(str(c) for c in row) for row in data]
-            )
-            return export_docx(text, filename).to_dict()
+            blocks = [{"type": "table", "data": data}]
+            return export_docx(blocks, filename).to_dict()
 
         elif fmt == ExportFormat.PPTX:
             slides = [
