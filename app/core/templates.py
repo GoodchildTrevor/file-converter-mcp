@@ -31,10 +31,6 @@ class TemplateRegistry:
 
     @classmethod
     def init(cls, docs_template_path: str) -> None:
-        """Scan docs_template_path and populate template paths.
-
-        Called once from app lifespan.
-        """
         cls._initialised = True
         base = docs_template_path.strip() if docs_template_path else ""
 
@@ -65,6 +61,11 @@ class TemplateRegistry:
 
     @classmethod
     def _find_any(cls, base: str, fmt: str) -> None:
+        """Search for any template file matching the format.
+
+        :param base: Base directory to search in.
+        :param fmt: File format to search for (e.g. 'docx', 'pptx', 'xlsx').
+        """
         for root, _, files in os.walk(base):
             for f in files:
                 if f.lower().endswith(f".{fmt}"):
@@ -74,12 +75,17 @@ class TemplateRegistry:
 
     @classmethod
     def get(cls, fmt: str) -> str | None:
+        """Retrieve a template path by format.
+
+        :param fmt: File format to look up (e.g. 'docx', 'pptx', 'xlsx').
+        :return: Absolute path to the template file, or ``None`` if not found.
+        """
         if not cls._initialised:
             log.warning("TemplateRegistry.get() called before init()")
         return cls._paths.get(fmt)
 
     @classmethod
     def reset(cls) -> None:
-        """For use in tests only."""
+        """Reset registry to defaults. For use in tests only."""
         cls._paths = {k: None for k in cls._paths}
         cls._initialised = False
