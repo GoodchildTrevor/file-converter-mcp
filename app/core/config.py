@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # ── Service ───────────────────────────────────────────────────────────────
     VERSION: str = "1.0.0"
-    MCP_AUTH_TOKEN: str = ""
+    MCP_AUTH_TOKEN: str
     LOG_LEVEL: str = "INFO"
 
     # ── Storage ───────────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # ── OpenWebUI integration (optional) ─────────────────────────────────────
     OWUI_URL: str = ""
-    JWT_SECRET: str = ""
+    JWT_SECRET: str
 
     # ── Cleanup ───────────────────────────────────────────────────────────────
     FILES_DELAY: int = 3600          # seconds; 0 = keep forever
