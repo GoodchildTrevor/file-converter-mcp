@@ -28,11 +28,19 @@ class TemplateRegistry:
         "xlsx": None,
     }
     _initialised: ClassVar[bool] = False
+    _named: ClassVar[dict[str, str]] = {}
 
     @classmethod
     def init(cls, docs_template_path: str) -> None:
         cls._initialised = True
         base = docs_template_path.strip() if docs_template_path else ""
+
+        if base and os.path.exists(base):
+            for f in os.listdir(base):
+                if f.lower().endswith(".docx") and f != "Default_Template.docx":
+                    name = os.path.splitext(f)[0].lower()
+                    cls._named[name] = os.path.join(base, f)
+                    log.info("Named template registered [%s]: %s", name, cls._named[name])
 
         if not base or not os.path.exists(base):
             if base:
@@ -58,6 +66,14 @@ class TemplateRegistry:
         for fmt in list(cls._paths):
             if cls._paths[fmt] is None:
                 cls._find_any(base, fmt)
+
+    @classmethod
+    def get_named(cls, name: str) -> str | None:
+        return cls._named.get(name.lower())
+
+    @classmethod
+    def list_named(cls) -> list[str]:
+        return sorted(cls._named.keys())
 
     @classmethod
     def _find_any(cls, base: str, fmt: str) -> None:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional 
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -187,6 +187,7 @@ def export_docx(
     content: list[dict] | str,
     filename: str | None,
     template_vars: dict[str, str] | None = None,
+    template_path: Optional[str] = None,
 ) -> FileRef:
     """Export *content* as a Word document and return a FileRef.
 
@@ -195,16 +196,17 @@ def export_docx(
     :param template_vars: When provided, opens the registered DOCX template
         and performs placeholder substitution instead of building the document
         from *content*.
+    :param template_path: Optional path to a DOCX template file.
     :return: FileRef with url, path, and name.
     """
     folder = new_export_folder()
     filepath, fname = resolve_output_path(folder, filename or "", "docx")
     url = public_url(folder, fname)
 
-    template_path = TemplateRegistry.get("docx")
+    resolved_path = template_path or TemplateRegistry.get("docx")
 
     if template_vars:
-        doc = _process_template_replacements(template_path, template_vars)
+        doc = _process_template_replacements(resolved_path, template_vars)
         doc.save(filepath)
         return FileRef(url=url, path=filepath, name=fname)
 
