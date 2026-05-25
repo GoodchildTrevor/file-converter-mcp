@@ -5,7 +5,10 @@ All work is delegated to formats/* modules.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
+import re
+from pathlib import Path
+from docx import Document
 
 from app import mcp
 from app.core.models import ExportError, ExportFormat
@@ -15,6 +18,7 @@ from formats.pdf import export_pdf
 from formats.pptx import export_pptx
 from formats.raw import export_raw
 from formats.xlsx import export_xlsx
+from storage.manager import StorageManager
 
 
 @mcp.tool()
@@ -211,3 +215,102 @@ async def export_document(
             message=str(exc),
             code="INTERNAL_ERROR"
         ).to_dict()
+
+
+@mcp.tool()
+async def fill_document_template(
+    template_name: str,
+    vars: dict[str, str],
+    filename: Optinal[str] = None,
+) -> dict[str, Any]:
+    """Fill a named .docx template with placeholder values and export the result.
+
+    Templates are .docx files stored in the templates/ directory.
+    Placeholders in the document use {{key}} syntax and are replaced
+    with the corresponding values from `vars`.
+
+    Use this tool for structured documents: protocols, letters, orders,
+    proxies, contracts, and any other named Word templates.
+
+    :param template_name: Name of the template file (without extension),
+        e.g. "protocol", "letter", "order", "proxy".
+        Use list_document_templates() to see available templates.
+
+    :param vars: Dict of placeholder replacements, e.g.:
+        {
+            "date": "25.05.2026",
+            "recipient": "Goodchild Trevor",
+            "amount": "150 000 $"
+        }
+
+    :param filename: Optional output filename (e.g. "protocol_2026.docx").
+        If omitted, generated automatically.
+
+    :returns: {"url": "...", "path": "...", "name": "..."} on success,
+              or {"error": {"message": "...", "code": "..."}} on failure.
+    """
+
+    templates_dir = Path(os.getenv("OWN_TEMPLATES_PATH", "templates"))
+    template_path = templates_dir / f"{template_name}.docx"
+
+    if not template_path.exists():
+        available = [p.stem for p in templates_dir.glob("*.docx")]
+        return ExportError(
+            message=f"Template '{template_name}' not found. Available: {available}",
+            code="TEMPLATE_NOT_FOUND",
+        ).to_dict()
+
+    def replace_in_text(text: str) -> str:
+        return re.sub(
+            r"\{\{(.+?)\}\}",
+            lambda m: str(vars.get(m.group(1).strip(), m.group(0))),
+            text,
+        )
+
+    doc = Document(str(template_path))
+
+    for para in doc.paragraphs:
+        for run in para.runs:
+            run.text = replace_in_text(run.text)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        run.text = replace_in_text(run.text)
+
+    storage = StorageManager()
+    folder_path = storage.generate_folder()
+    out_filename = os.path.basename(filename or f"{template_name}_filled.docx")
+    if not out_filename.endswith(".docx"):
+        out_filename += ".docx"
+    out_path = os.path.join(folder_path, out_filename)
+    doc.save(out_path)
+
+    from app.core.models import ExportResult
+    from storage.manager import public_url
+    return ExportResult(
+        url=public_url(folder_path, out_filename),
+        path=out_path,
+        name=out_filename,
+    ).to_dict()
+
+
+@mcp.tool()
+def list_document_templates() -> dict[str, Any]:
+    """List all available named .docx templates.
+
+    Returns template names that can be passed to fill_document_template().
+
+    :returns: {"templates": ["protocol", "letter", "order", "proxy", ...]}
+    """
+    from pathlib import Path
+
+    templates_dir = Path(os.getenv("DOCS_TEMPLATE_PATH", "templates"))
+    if not templates_dir.exists():
+        return {"templates": [], "error": "Templates directory not found"}
+
+    names = sorted(p.stem for p in templates_dir.glob("*.docx")
+                   if p.stem != "Default_Template")
+    return {"templates": names}
