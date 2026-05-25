@@ -213,6 +213,7 @@ async def export_document(
             code="INTERNAL_ERROR"
         ).to_dict()
 
+
 @mcp.tool()
 async def fill_document_template(
     template_name: str,
@@ -225,18 +226,16 @@ async def fill_document_template(
     Placeholders use {{key}} syntax inside the Word document text.
 
     Use for structured documents: protocols, letters, orders, proxies, contracts.
-    Call list_document_templates() first to see what's available.
+    Call list_document_templates() first to see available templates and required placeholders.
 
     :param template_name: Template name without extension, e.g. "protocol", "letter".
     :param vars: Placeholder replacements, e.g. {"date": "25.05.2026", "recipient": "ООО Рога"}.
     :param filename: Optional output filename (e.g. "order_2026.docx").
     :returns: {"url": "...", "path": "...", "name": "..."} or {"error": {...}}.
     """
-    from app.core.templates import TemplateRegistry
-
     template_path = TemplateRegistry.get_named(template_name)
     if not template_path:
-        available = TemplateRegistry.list_named()
+        available = [t["name"] for t in TemplateRegistry.list_named()]
         return ExportError(
             message=f"Template '{template_name}' not found. Available: {available}",
             code="TEMPLATE_NOT_FOUND",
@@ -252,8 +251,24 @@ async def fill_document_template(
 
 @mcp.tool()
 def list_document_templates() -> dict[str, Any]:
-    """List all available named .docx templates for fill_document_template().
+    """List all available named .docx templates with placeholders and fill hints.
 
-    :returns: {"templates": ["letter", "order", "protocol", "proxy"]}
+    Call this before fill_document_template() to discover what templates exist
+    and exactly which keys are required in the vars dict, with hints on how to
+    fill each placeholder correctly.
+
+    :returns:
+        {"templates": [
+            {
+                "name": "protocol",
+                "description": "Протокол совещания",
+                "placeholders": {
+                    "date": "Дата проведения, например: 25.05.2026",
+                    "chairman": "ФИО председателя полностью",
+                    "agenda": "Краткая повестка дня"
+                }
+            },
+            ...
+        ]}
     """
     return {"templates": TemplateRegistry.list_named()}

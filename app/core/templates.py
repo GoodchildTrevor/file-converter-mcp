@@ -4,6 +4,7 @@ All format modules import from here. Nobody reads DOCS_TEMPLATE_PATH directly.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -28,7 +29,8 @@ class TemplateRegistry:
         "xlsx": None,
     }
     _initialised: ClassVar[bool] = False
-    _named: ClassVar[dict[str, str]] = {}
+    # Stores {name: {"path": str, "meta": dict}} for named custom templates
+    _named: ClassVar[dict[str, dict]] = {}
 
     @classmethod
     def init(cls, docs_template_path: str) -> None:
@@ -39,8 +41,20 @@ class TemplateRegistry:
             for f in os.listdir(base):
                 if f.lower().endswith(".docx") and f != "Default_Template.docx":
                     name = os.path.splitext(f)[0].lower()
-                    cls._named[name] = os.path.join(base, f)
-                    log.info("Named template registered [%s]: %s", name, cls._named[name])
+                    docx_path = os.path.join(base, f)
+
+                    # Load sidecar JSON metadata if present
+                    json_path = os.path.join(base, f"{os.path.splitext(f)[0]}.json")
+                    meta: dict = {}
+                    if os.path.exists(json_path):
+                        try:
+                            with open(json_path, encoding="utf-8") as jf:
+                                meta = json.load(jf)
+                        except Exception:
+                            log.warning("Failed to load metadata for template '%s'", name)
+
+                    cls._named[name] = {"path": docx_path, "meta": meta}
+                    log.info("Named template registered [%s]: %s", name, docx_path)
 
         if not base or not os.path.exists(base):
             if base:
@@ -69,11 +83,34 @@ class TemplateRegistry:
 
     @classmethod
     def get_named(cls, name: str) -> str | None:
-        return cls._named.get(name.lower())
+        """Return the file path for a named template, or None if not found."""
+        entry = cls._named.get(name.lower())
+        return entry["path"] if entry else None
 
     @classmethod
-    def list_named(cls) -> list[str]:
-        return sorted(cls._named.keys())
+    def get_named_meta(cls, name: str) -> dict:
+        """Return the metadata dict for a named template (empty dict if none)."""
+        entry = cls._named.get(name.lower())
+        return entry["meta"] if entry else {}
+
+    @classmethod
+    def list_named(cls) -> list[dict]:
+        """Return all named templates with their metadata.
+
+        Each entry contains:
+            - name: str
+            - description: str (from JSON, empty if not set)
+            - placeholders: dict[str, str] (key → hint, empty if not set)
+        """
+        result = []
+        for name, entry in sorted(cls._named.items()):
+            meta = entry.get("meta", {})
+            result.append({
+                "name": name,
+                "description": meta.get("description", ""),
+                "placeholders": meta.get("placeholders", {}),
+            })
+        return result
 
     @classmethod
     def _find_any(cls, base: str, fmt: str) -> None:
@@ -104,4 +141,5 @@ class TemplateRegistry:
     def reset(cls) -> None:
         """Reset registry to defaults. For use in tests only."""
         cls._paths = {k: None for k in cls._paths}
+        cls._named = {}
         cls._initialised = False
