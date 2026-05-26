@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -24,7 +25,12 @@ async def serve_file(folder_name: str, filename: str):
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    if not os.path.isfile(file_path):
+    # Retry up to 5 seconds — volume sync between containers may lag
+    for _ in range(10):
+        if os.path.isfile(file_path):
+            break
+        await asyncio.sleep(0.5)
+    else:
         raise HTTPException(status_code=404, detail="File not found")
 
     # RFC 5987: filename*=UTF-8''<percent-encoded> for non-ASCII names
