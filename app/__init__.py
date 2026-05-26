@@ -28,6 +28,10 @@ async def lifespan(app: Any):
         settings.OWN_TEMPLATES_PATH
     )
 
+    # Register per-template MCP tools after registry is populated
+    from tools.template_factory import register_template_tools
+    register_template_tools()
+
     http_client = httpx.AsyncClient(
         timeout=settings.HTTP_TIMEOUT,
         headers={"User-Agent": "mcp-client/1.0"},
@@ -45,7 +49,9 @@ mcp = FastMCP(
     name="file-converter-mcp",
     instructions=(
         "Export and convert content to DOCX, PPTX, XLSX, PDF, CSV and other formats. "
-        "Optionally upload results to OpenWebUI."
+        "Optionally upload results to OpenWebUI. "
+        "For structured business documents (protocols, letters, orders, contracts) "
+        "prefer the dedicated fill_<template_name>() tools over generic export."
     ),
     lifespan=lifespan,
 )
