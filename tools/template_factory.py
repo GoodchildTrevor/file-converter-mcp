@@ -1,11 +1,10 @@
 """Template tool factory.
 
-Reads TemplateRegistry._named at call time and registers one @mcp.tool()
-per named template, e.g. fill_protocol(...), fill_letter(...), etc.
+Reads TemplateRegistry at startup and registers one @mcp.tool() per named
+template, e.g. fill_protocol(...), fill_letter(...), etc.
 
-Each generated tool has explicit keyword parameters derived from the
-template's JSON placeholders, so the LLM agent sees a concrete schema
-instead of a generic vars: dict argument.
+Each generated tool has explicit named parameters derived from the template's
+JSON placeholders — FastMCP does not support **kwargs in tool functions.
 
 Call register_template_tools() once inside lifespan, AFTER TemplateRegistry.init().
 """
@@ -23,14 +22,16 @@ log = logging.getLogger(__name__)
 
 
 def _build_tool(name: str, description: str, placeholders: dict[str, str]) -> None:
-    """Create and register one MCP tool for *name*.
+    """Dynamically build and register one MCP tool for *name*.
 
-    The generated async function has:
-    - One str kwarg per placeholder key (default "").
-    - An optional `filename` kwarg.
-    - A docstring listing every placeholder with its hint.
+    FastMCP inspects the real function signature to build the JSON schema,
+    so we must produce a function with explicit named parameters — **kwargs
+    is rejected. We use exec() to synthesise a function with the correct
+    signature at runtime.
     """
     placeholder_keys = list(placeholders.keys())
+
+    # --- docstring -----------------------------------------------------------
     param_hints = "\n".join(
         f"    :param {k}: {hint}" for k, hint in placeholders.items()
     )
@@ -43,40 +44,42 @@ def _build_tool(name: str, description: str, placeholders: dict[str, str]) -> No
         f"or {{\"error\": {{...}}}}."
     )
 
-    # Capture loop variables via default argument trick
-    async def _tool(filename: str | None = None, **kwargs: str) -> dict[str, Any]:
-        template_path = TemplateRegistry.get_named(name)
-        if not template_path:
-            return ExportError(
-                message=f"Template '{name}' not found.",
-                code="TEMPLATE_NOT_FOUND",
-            ).to_dict()
+    # --- build real signature via exec() ------------------------------------
+    # Signature: async def fill_<name>(key1: str = "", key2: str = "", ..., filename: str | None = None)
+    params_src = ", ".join(f'{k}: str = ""' for k in placeholder_keys)
+    if params_src:
+        params_src += ", "
+    params_src += "filename: str | None = None"
 
-        # Collect only declared placeholder keys; ignore unknown kwargs
-        vars: dict[str, str] = {
-            k: str(kwargs.get(k, "")) for k in placeholder_keys
-        }
-        return export_docx(
-            content=[],
-            filename=filename or f"{name}_filled.docx",
-            template_path=template_path,
-            template_vars=vars,
-        ).to_dict()
+    # We pass the heavy callables through the exec namespace so the generated
+    # function closes over them without relying on globals.
+    func_src = (
+        f"async def fill_{name}({params_src}) -> dict:\n"
+        f"    template_path = _get_named('{name}')\n"
+        f"    if not template_path:\n"
+        f"        return _export_error(\"Template '{name}' not found.\", \"TEMPLATE_NOT_FOUND\")\n"
+        f"    vars_ = {{k: str(locals().get(k, '')) for k in {placeholder_keys!r}}}\n"
+        f"    return _export_docx([], filename or '{name}_filled.docx', template_path, vars_)\n"
+    )
 
-    tool_name = f"fill_{name}"
-    _tool.__name__ = tool_name
-    _tool.__qualname__ = tool_name
-    _tool.__doc__ = full_doc
+    ns: dict[str, Any] = {
+        "_get_named": TemplateRegistry.get_named,
+        "_export_docx": lambda content, fname, tpath, tvars: export_docx(
+            content=content,
+            filename=fname,
+            template_path=tpath,
+            template_vars=tvars,
+        ).to_dict(),
+        "_export_error": lambda msg, code: ExportError(message=msg, code=code).to_dict(),
+    }
+    exec(func_src, ns)  # noqa: S102
 
-    # Set typed annotations so FastMCP can build a proper JSON schema.
-    # Every placeholder becomes `str`, filename is optional.
-    annotations: dict[str, Any] = {k: str for k in placeholder_keys}
-    annotations["filename"] = str | None
-    annotations["return"] = dict
-    _tool.__annotations__ = annotations
+    fn = ns[f"fill_{name}"]
+    fn.__doc__ = full_doc
+    fn.__module__ = __name__
 
-    mcp.tool()(_tool)
-    log.info("Registered template tool: %s (params: %s)", tool_name, placeholder_keys)
+    mcp.tool()(fn)
+    log.info("Registered template tool: fill_%s (params: %s)", name, placeholder_keys)
 
 
 def register_template_tools() -> int:
@@ -105,8 +108,11 @@ def register_template_tools() -> int:
             )
             continue
 
-        _build_tool(tname, tdesc, tplaceholders)
-        count += 1
+        try:
+            _build_tool(tname, tdesc, tplaceholders)
+            count += 1
+        except Exception as exc:
+            log.error("Failed to register tool for template '%s': %s", tname, exc)
 
     log.info("Template tools registered: %d", count)
     return count
