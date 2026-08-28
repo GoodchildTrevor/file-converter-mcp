@@ -1,8 +1,4 @@
-"""MCP tools: export_text_file, export_document.
-
-Thin wrappers only — no business logic here.
-All work is delegated to formats/* modules.
-"""
+"""MCP tools: export_text_file, export_document, fill_document_template, list_document_templates."""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -10,6 +6,7 @@ from typing import Any, Optional
 from app import mcp
 from app.core.templates import TemplateRegistry
 from app.core.models import ExportError, ExportFormat
+from formats.coerce import coerce
 from formats.csv import export_csv
 from formats.docx import export_docx
 from formats.pdf import export_pdf
@@ -29,26 +26,26 @@ async def export_text_file(
     Use this tool when the user asks to save, export, or download content as a file.
 
     :param format: Target file format. Choose based on content type:
-        - "txt"  — plain text, no formatting
-        - "md"   — Markdown text
-        - "html" — HTML markup string
-        - "json" — JSON string (pass serialized JSON as text)
-        - "xml"  — XML string
-        - "csv"  — tabular data; requires text to be a list of row-lists (see below)
-        - "docx" — Word document; requires text to be a list of content-block dicts (see below)
-        - "pdf"  — PDF; same structure as docx
-        - "pptx" — PowerPoint; same structure as docx
-        - "xlsx" — Excel spreadsheet; requires text to be a list of row-lists (see below)
+        - "txt"  -- plain text, no formatting
+        - "md"   -- Markdown text
+        - "html" -- HTML markup string
+        - "json" -- JSON string (pass serialized JSON as text)
+        - "xml"  -- XML string
+        - "csv"  -- tabular data; requires text to be a list of row-lists (see below)
+        - "docx" -- Word document; requires text to be a list of content-block dicts (see below)
+        - "pdf"  -- PDF; same structure as docx
+        - "pptx" -- PowerPoint; same structure as docx
+        - "xlsx" -- Excel spreadsheet; requires text to be a list of row-lists (see below)
 
     :param filename: Optional output filename without path (e.g. "report.docx").
         Extension is added automatically if missing. If omitted, a name is generated.
 
     :param text: Content to export. Type depends on format:
 
-        FOR txt / md / html / json / xml — pass a plain Python string:
+        FOR txt / md / html / json / xml -- pass a plain Python string:
             "Hello world"
 
-        FOR csv / xlsx — pass a list of rows, each row is a list of cell values.
+        FOR csv / xlsx -- pass a list of rows, each row is a list of cell values.
             First row is treated as the header:
             [
                 ["Name", "Score", "Grade"],
@@ -56,11 +53,11 @@ async def export_text_file(
                 ["Bob",   88, "B"],
             ]
 
-        FOR docx / pdf / pptx — pass a FLAT list of content-block dicts.
+        FOR docx / pdf / pptx -- pass a FLAT list of content-block dicts.
             Do NOT wrap blocks in an outer dict or add a "content" key around them.
             Supported block types:
 
-            {"type": "heading",   "level": 1, "text": "Document title"}  # level 1–6
+            {"type": "heading",   "level": 1, "text": "Document title"}  # level 1-6
             {"type": "heading",   "level": 2, "text": "Section heading"}
             {"type": "paragraph", "text": "Body text goes here."}
             {"type": "list",      "items": ["First item", "Second item", "Third item"]}
@@ -69,7 +66,7 @@ async def export_text_file(
                 ["value 1",  "value 2"],
             ]}
 
-            Full example — a docx with a title, intro, bullet list, and table:
+            Full example -- a docx with a title, intro, bullet list, and table:
             [
                 {"type": "heading",   "level": 1, "text": "Q1 Sales Report"},
                 {"type": "paragraph", "text": "This report summarises Q1 performance."},
@@ -81,7 +78,7 @@ async def export_text_file(
                 ]},
             ]
 
-            WRONG — never wrap in an outer object; this produces an empty file:
+            WRONG -- never wrap in an outer object; this produces an empty file:
             [{"title": "Report", "content": [...]}]   <- incorrect
 
     :returns: {"url": "...", "path": "...", "name": "..."} on success,
@@ -100,23 +97,49 @@ async def export_text_file(
             return export_raw(text, filename, fmt).to_dict()
 
         elif fmt == ExportFormat.CSV:
+            text = coerce(text)
             if not isinstance(text, list):
-                return ExportError(message="CSV format requires list input").to_dict()
+                return ExportError(
+                    message="CSV format requires list input",
+                    code="INVALID_INPUT",
+                ).to_dict()
             return export_csv(text, filename).to_dict()
 
-        elif fmt == ExportFormat.DOCX:
-            return export_docx(text, filename).to_dict()
-
-        elif fmt == ExportFormat.PPTX:
-            return export_pptx(text, filename).to_dict()
-
         elif fmt == ExportFormat.XLSX:
+            text = coerce(text)
             if not isinstance(text, list):
-                return ExportError(message="XLSX format requires list input").to_dict()
+                return ExportError(
+                    message="XLSX format requires list input",
+                    code="INVALID_INPUT",
+                ).to_dict()
             return export_xlsx(text, filename).to_dict()
 
-        elif fmt == ExportFormat.PDF:
-            return (await export_pdf(text, filename)).to_dict()
+        elif fmt in (ExportFormat.DOCX, ExportFormat.PPTX, ExportFormat.PDF):
+            # Some MCP bridges serialize list/dict arguments to a JSON string
+            # before the handler sees them. Recover the original structure
+            # instead of silently splitting the JSON string into a single
+            # garbled "paragraph" (the original bug this guard fixes).
+            text = coerce(text)
+            if isinstance(text, list) and not all(isinstance(x, (dict, str)) for x in text):
+                return ExportError(
+                    message=f"{format} requires a plain string or a flat list of "
+                            f"content-block dicts/strings, got a list containing "
+                            f"non-dict/non-str items",
+                    code="INVALID_INPUT",
+                ).to_dict()
+            if not isinstance(text, (str, list)):
+                return ExportError(
+                    message=f"{format} requires a plain string or a flat list of "
+                            f"content-block dicts",
+                    code="INVALID_INPUT",
+                ).to_dict()
+
+            if fmt == ExportFormat.DOCX:
+                return export_docx(text, filename).to_dict()
+            elif fmt == ExportFormat.PPTX:
+                return export_pptx(text, filename).to_dict()
+            else:
+                return (await export_pdf(text, filename)).to_dict()
 
     except ExportError as exc:
         return exc.to_dict()
@@ -128,7 +151,7 @@ async def export_text_file(
 
 @mcp.tool()
 async def export_document(
-    data: list[list[str]],
+    data: list[list[Any]],
     filename: str | None = None,
     format: str = "csv",
     title: str | None = None,
@@ -152,10 +175,10 @@ async def export_document(
         Extension is added automatically if missing.
 
     :param format: Target file format. Supported values:
-        - "csv"  — comma-separated values (default)
-        - "xlsx" — Excel spreadsheet; pass title to set the sheet name
-        - "docx" — Word document with a proper table (first row = bold header)
-        - "pptx" — PowerPoint; each row becomes one slide
+        - "csv"  -- comma-separated values (default)
+        - "xlsx" -- Excel spreadsheet; pass title to set the sheet name
+        - "docx" -- Word document with a proper table (first row = bold header)
+        - "pptx" -- PowerPoint; each row becomes one slide
                    (first cell = slide title, remaining cells = body text)
 
     :param title: Optional title string.
@@ -172,6 +195,17 @@ async def export_document(
             message=f"Unsupported format: {format}",
             code="UNSUPPORTED_FORMAT"
         ).to_dict()
+
+    # Some MCP bridges serialize list-of-lists arguments to a JSON string
+    # before the handler sees them -- recover it here instead of silently
+    # building a garbage table/document from the raw string.
+    data = coerce(data)
+    if not isinstance(data, list) or not all(isinstance(row, list) for row in data):
+        return ExportError(
+            message="export_document requires a 2-D list of rows (a list of lists)",
+            code="INVALID_INPUT",
+        ).to_dict()
+    data = [["" if cell is None else str(cell) for cell in row] for row in data]
 
     try:
         if fmt == ExportFormat.CSV:
@@ -229,7 +263,7 @@ async def fill_document_template(
     Call list_document_templates() first to see available templates and required placeholders.
 
     :param template_name: Template name without extension, e.g. "protocol", "letter".
-    :param vars: Placeholder replacements, e.g. {"date": "25.05.2026", "recipient": "ООО Рога"}.
+    :param vars: Placeholder replacements, e.g. {"date": "25.05.2026", "recipient": "..."}.
     :param filename: Optional output filename (e.g. "order_2026.docx").
     :returns: {"url": "...", "path": "...", "name": "..."} or {"error": {...}}.
     """
@@ -261,11 +295,11 @@ def list_document_templates() -> dict[str, Any]:
         {"templates": [
             {
                 "name": "protocol",
-                "description": "Протокол совещания",
+                "description": "...",
                 "placeholders": {
-                    "date": "Дата проведения, например: 25.05.2026",
-                    "chairman": "ФИО председателя полностью",
-                    "agenda": "Краткая повестка дня"
+                    "date": "...",
+                    "chairman": "...",
+                    "agenda": "..."
                 }
             },
             ...

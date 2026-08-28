@@ -10,13 +10,22 @@ from docx.shared import Pt
 
 from app.core.models import FileRef
 from app.core.templates import TemplateRegistry
+from formats.coerce import coerce
 from storage.paths import new_export_folder, public_url, resolve_output_path
 
 log = logging.getLogger(__name__)
 
 
 def _normalize_content(content: list[dict] | str) -> list[dict]:
-    """Normalize content to a list of structured dicts."""
+    """Normalize content to a list of structured dicts.
+
+    Defensive second line of guard: if *content* is a JSON-encoded string
+    that slipped through the tool-level check in tools/export_tools.py
+    (e.g. because export_docx() was called directly, bypassing the MCP
+    tool wrapper), deserialize it here too instead of splitting it into a
+    single garbled "paragraph".
+    """
+    content = coerce(content)
     if isinstance(content, str):
         return [
             {"type": "paragraph", "text": line}
@@ -56,7 +65,7 @@ def _replace_in_paragraph(paragraph: Any, replacements: dict[str, str]) -> None:
     Word often splits a placeholder like {{Who}} across multiple runs
     (e.g. "{{", "Who", "}}").  We read the full paragraph text, apply all
     replacements, then write the result back into the first run and clear
-    the remaining runs — preserving the formatting of the first run.
+    the remaining runs -- preserving the formatting of the first run.
     """
     full_text = paragraph.text
     new_text = full_text
@@ -195,13 +204,14 @@ def _append_content(doc: Any, content: list[dict]) -> None:
         item_type = item.get("type")
 
         if item_type == "image_query":
-            log.warning("image_query items are not supported in the DOCX exporter — skipped")
+            log.warning("image_query items are not supported in the DOCX exporter -- skipped")
             continue
 
         renderer = _RENDERERS.get(item_type)
         if renderer:
             renderer(doc, item)
         elif "text" in item:
+            # Unknown type but has text -- treat as paragraph.
             _render_paragraph(doc, item)
 
 
@@ -232,6 +242,7 @@ def export_docx(
         doc.save(filepath)
         return FileRef(url=url, path=filepath, name=fname)
 
+    # --- Content-build mode ---
     doc = _load_document(template_path)
     _append_content(doc, _normalize_content(content))
     doc.save(filepath)
@@ -240,10 +251,10 @@ def export_docx(
 
 def _create_docx(
     content: list[dict] | str,
-    filename: str,
+    filename: str | None,
     folder_path: str | None = None,
     template_vars: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Legacy helper returning ``{"url", "path"}`` — delegates to export_docx."""
+    """Legacy helper returning ``{"url", "path"}`` -- delegates to export_docx."""
     ref = export_docx(content=content, filename=filename, template_vars=template_vars)
     return {"url": ref.url, "path": ref.path}
