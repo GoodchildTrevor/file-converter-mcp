@@ -7,12 +7,28 @@ from app import mcp
 from app.core.templates import TemplateRegistry
 from app.core.models import ExportError, ExportFormat
 from formats.coerce import coerce
+from formats.validate import normalize_structured_input
 from formats.csv import export_csv
 from formats.docx import export_docx
 from formats.pdf import export_pdf
 from formats.pptx import export_pptx
 from formats.raw import export_raw
 from formats.xlsx import export_xlsx
+
+
+def _invalid_content_error(format: str, exc: ContentValidationError) -> dict[str, Any]:
+    """Convert a ContentValidationError into the tool error dict."""
+    return ExportError(
+        message=(
+            f"Invalid content for {format}: {exc}. Content must be a plain "
+            "string or a flat list of content-block dicts "
+            '(e.g. {"type": "paragraph", "text": "..."}). If you intended '
+            "to export markup/code as literal text, wrap it in a "
+            '"paragraph" block or export with a text format (txt/md).'
+        ),
+        code="INVALID_CONTENT",
+        details={"block_index": exc.index},
+    ).to_dict()
 
 
 @mcp.tool()
@@ -54,6 +70,9 @@ async def export_text_file(
             ]
 
         FOR docx / pdf / pptx -- pass a FLAT list of content-block dicts.
+            Send the list as a structured argument. Do not serialize it
+            to a JSON string. Do not wrap it in a markdown code fence
+            (```json ... ```). Both produce an INVALID_INPUT error.
             Do NOT wrap blocks in an outer dict or add a "content" key around them.
             Supported block types:
 
@@ -65,6 +84,8 @@ async def export_text_file(
                 ["Column A", "Column B"],   # first row = bold header
                 ["value 1",  "value 2"],
             ]}
+
+            A plain string is also accepted and rendered as paragraphs.
 
             Full example -- a docx with a title, intro, bullet list, and table:
             [
@@ -78,8 +99,11 @@ async def export_text_file(
                 ]},
             ]
 
-            WRONG -- never wrap in an outer object; this produces an empty file:
+            WRONG -- never wrap in an outer object; this produces an error:
             [{"title": "Report", "content": [...]}]   <- incorrect
+
+            INVALID blocks are rejected with error code INVALID_CONTENT
+            naming the offending block index -- never rendered as raw markup.
 
     :returns: {"url": "...", "path": "...", "name": "..."} on success,
               or {"error": {"message": "...", "code": "..."}} on failure.
@@ -115,24 +139,13 @@ async def export_text_file(
             return export_xlsx(text, filename).to_dict()
 
         elif fmt in (ExportFormat.DOCX, ExportFormat.PPTX, ExportFormat.PDF):
-            # Some MCP bridges serialize list/dict arguments to a JSON string
-            # before the handler sees them. Recover the original structure
-            # instead of silently splitting the JSON string into a single
-            # garbled "paragraph" (the original bug this guard fixes).
-            text = coerce(text)
-            if isinstance(text, list) and not all(isinstance(x, (dict, str)) for x in text):
-                return ExportError(
-                    message=f"{format} requires a plain string or a flat list of "
-                            f"content-block dicts/strings, got a list containing "
-                            f"non-dict/non-str items",
-                    code="INVALID_INPUT",
-                ).to_dict()
-            if not isinstance(text, (str, list)):
-                return ExportError(
-                    message=f"{format} requires a plain string or a flat list of "
-                            f"content-block dicts",
-                    code="INVALID_INPUT",
-                ).to_dict()
+            # Validate input before export. Recover the block list when the
+            # MCP bridge sent it as a JSON string, wrapped dict or one-item
+            # list. Fail with a clear error instead of writing raw markup
+            # into the user's document.
+            text, err = normalize_structured_input(text, str(fmt.value))
+            if err is not None:
+                return err.to_dict()
 
             if fmt == ExportFormat.DOCX:
                 return export_docx(text, filename).to_dict()
@@ -145,6 +158,8 @@ async def export_text_file(
         return exc.to_dict()
     except NotImplementedError as exc:
         return ExportError(message=str(exc), code="NOT_IMPLEMENTED").to_dict()
+    except ValueError as exc:
+        return ExportError(message=str(exc), code="INVALID_INPUT").to_dict()
     except Exception as exc:
         return ExportError(message=str(exc), code="INTERNAL_ERROR").to_dict()
 
