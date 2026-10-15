@@ -10,7 +10,8 @@ from docx.shared import Pt
 
 from app.core.models import FileRef
 from app.core.templates import TemplateRegistry
-from formats.coerce import coerce
+from formats.coerce import coerce, coerce_or_error, strip_code_fence
+from formats.content import validate_blocks
 from storage.paths import new_export_folder, public_url, resolve_output_path
 
 log = logging.getLogger(__name__)
@@ -19,29 +20,95 @@ log = logging.getLogger(__name__)
 def _normalize_content(content: list[dict] | str) -> list[dict]:
     """Normalize content to a list of structured dicts.
 
-    Defensive second line of guard: if *content* is a JSON-encoded string
-    that slipped through the tool-level check in tools/export_tools.py
-    (e.g. because export_docx() was called directly, bypassing the MCP
-    tool wrapper), deserialize it here too instead of splitting it into a
-    single garbled "paragraph".
+    If *content* is a JSON-encoded string, deserialize it. If it is a
+    JSON-like string that does not parse (truncated or malformed), raise
+    ValueError. If it is a plain string, strip a markdown code fence, if
+    present, and split the string into one paragraph per line. In all
+    other cases, return an empty list.
     """
     content = coerce(content)
     if isinstance(content, str):
+        recovered, error = coerce_or_error(content, "docx")
+        if error is not None:
+            raise ValueError(error["error"]["message"])
+        content = strip_code_fence(content)
         return [
             {"type": "paragraph", "text": line}
             for line in content.splitlines()
             if line.strip()
         ]
-    if isinstance(content, list):
-        return content
-    return []
+    return validate_blocks(content)
+
+
+def _validate_content_blocks(content: list) -> None:
+    """Check that every item is a content block that a renderer knows.
+
+    Raise ValueError with the index and the reason when an item is not
+    valid. The check runs before the export starts, so a bad input does
+    not produce a partial file.
+
+    Known block types and the fields they need:
+    - heading:   "text" (str), "level" (int) is optional;
+    - title:     "text" (str);
+    - subtitle:  "text" (str);
+    - paragraph: "text" (str);
+    - list:      "items" (list of str);
+    - table:     "data" (2-D list; each row is a list of cell values).
+    """
+    known_types = {
+        "heading": ("text", str),
+        "title": ("text", str),
+        "subtitle": ("text", str),
+        "paragraph": ("text", str),
+        "list": ("items", list),
+        "table": ("data", list),
+    }
+
+    for index, item in enumerate(content):
+        if isinstance(item, str):
+            continue
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"Content item {index} is not a dict or a string. "
+                f"Send a content-block dict, for example "
+                f'{{"type": "paragraph", "text": "..."}}.'
+            )
+
+        item_type = item.get("type")
+        if item_type not in known_types:
+            raise ValueError(
+                f"Content item {index} has unknown type {item_type!r}. "
+                f"Use one of: {', '.join(sorted(known_types))}."
+            )
+
+        field_name, field_type = known_types[item_type]
+        field_value = item.get(field_name)
+        if field_value is None:
+            raise ValueError(
+                f"Content item {index} of type {item_type!r} has no "
+                f'"{field_name}" field.'
+            )
+        if not isinstance(field_value, field_type):
+            raise ValueError(
+                f"Content item {index} of type {item_type!r} has a "
+                f'"{field_name}" field with the wrong type. '
+                f"Expected {field_type.__name__}, got "
+                f"{type(field_value).__name__}."
+            )
+
+        if item_type == "table":
+            for row_index, row in enumerate(field_value):
+                if not isinstance(row, list):
+                    raise ValueError(
+                        f"Content item {index} (table) has a row that is "
+                        f"not a list (row {row_index})."
+                    )
 
 
 def _load_document(template_path: str | None) -> Any:
     """Load a style template or create an empty document.
 
-    Clears all content from the template so we start with a blank
-    slate but retain the style definitions.
+    Remove all template content, but keep the style definitions.
     """
     if not template_path:
         return Document()
@@ -203,16 +270,9 @@ def _append_content(doc: Any, content: list[dict]) -> None:
 
         item_type = item.get("type")
 
-        if item_type == "image_query":
-            log.warning("image_query items are not supported in the DOCX exporter -- skipped")
-            continue
-
         renderer = _RENDERERS.get(item_type)
         if renderer:
             renderer(doc, item)
-        elif "text" in item:
-            # Unknown type but has text -- treat as paragraph.
-            _render_paragraph(doc, item)
 
 
 def export_docx(
@@ -230,6 +290,8 @@ def export_docx(
         document from *content*.
     :param template_path: Optional explicit path to a DOCX template file.
     :return: FileRef with url, path, and name.
+    :raises formats.content.ContentValidationError: when *content* contains
+        malformed blocks (unknown/missing 'type', bad table data, etc.).
     """
     folder = new_export_folder()
     filepath, fname = resolve_output_path(folder, filename or "", "docx")
@@ -243,8 +305,10 @@ def export_docx(
         return FileRef(url=url, path=filepath, name=fname)
 
     # --- Content-build mode ---
+    normalized = _normalize_content(content)
+    _validate_content_blocks(normalized)
     doc = _load_document(template_path)
-    _append_content(doc, _normalize_content(content))
+    _append_content(doc, normalized)
     doc.save(filepath)
     return FileRef(url=url, path=filepath, name=fname)
 
