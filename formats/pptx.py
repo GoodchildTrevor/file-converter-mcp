@@ -2,17 +2,133 @@
 """
 from __future__ import annotations
 
+import logging
+import os
+from io import BytesIO
+from typing import Any, Dict, List, Optional
+
+import httpx
+from pptx import Presentation
+from pptx.enum.shapes import PP_PLACEHOLDER
+from pptx.enum.text import MSO_AUTO_SIZE
+from pptx.util import Inches, Pt as PptPt
+
 from app.core.models import FileRef
 from app.core.templates import TemplateRegistry
+from formats.content import ContentValidationError, validate_slides
+from formats.coerce import coerce
+from storage.paths import new_export_folder, public_url, resolve_output_path
 
-template = TemplateRegistry.get("pptx")  # str | None
+log = logging.getLogger(__name__)
+
+
+# ── DOCX → PPTX slide conversion ──────────────────────────────────────────────
+
+
+def _is_docx_blocks(items: list) -> bool:
+    """Return True if *items* looks like a list of DOCX content blocks
+    (dicts with a 'type' key) rather than PPTX slide dicts."""
+    if not items:
+        return False
+    first = items[0]
+    if not isinstance(first, dict):
+        return False
+    return "type" in first
+
+
+def _docx_blocks_to_slides(blocks: list) -> list[dict]:
+    """Convert DOCX content blocks into PPTX slide dicts.
+
+    Rules:
+    - heading level 1 / title / subtitle (first) → new slide
+    - heading level 2+ → content line in current slide (bold marker)
+    - paragraph → content line
+    - list → one content line per item
+    - table → one content line per row (cells joined by " | ")
+    - plain string → content line
+
+    If no current slide exists, a new one is created with an empty title.
+    """
+    slides: list[dict] = []
+    current: dict | None = None
+
+    def _ensure_slide() -> dict:
+        nonlocal current
+        if current is None:
+            current = {"title": "", "content": []}
+            slides.append(current)
+        return current
+
+    for block in blocks:
+        if isinstance(block, str):
+            s = _ensure_slide()
+            s["content"].append(block)
+            continue
+
+        if not isinstance(block, dict):
+            continue
+
+        btype = block.get("type", "")
+
+        if btype in ("title", "subtitle"):
+            # Start a new slide
+            current = {"title": str(block.get("text", "")), "content": []}
+            slides.append(current)
+
+        elif btype == "heading":
+            level = block.get("level", 1)
+            text = str(block.get("text", ""))
+            if level <= 1:
+                # New slide
+                current = {"title": text, "content": []}
+                slides.append(current)
+            else:
+                # Sub-heading in current slide
+                s = _ensure_slide()
+                s["content"].append(text)
+
+        elif btype == "paragraph":
+            s = _ensure_slide()
+            s["content"].append(str(block.get("text", "")))
+
+        elif btype == "list":
+            s = _ensure_slide()
+            for item in block.get("items", []):
+                s["content"].append(f"• {item}")
+
+        elif btype == "table":
+            s = _ensure_slide()
+            for row in block.get("data", []):
+                s["content"].append(" | ".join(str(cell) for cell in row))
+
+        else:
+            # Unknown type — skip (already validated upstream)
+            pass
+
+    # Remove slides with empty title AND empty content
+    slides = [s for s in slides if s["title"] or s["content"]]
+    return slides
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 
 def export_pptx(slides: list[dict] | str, filename: str | None) -> FileRef:
     template_path = TemplateRegistry.get("pptx")
 
+    # Defensive second line of guard (the MCP tool already validates):
+    # recover JSON-serialized input, then fail loud on malformed slides
+    # instead of rendering raw markup into the presentation.
+    slides = coerce(slides)
+
     if isinstance(slides, str):
         slides = [{"title": "", "content": slides}]
+    elif isinstance(slides, list) and _is_docx_blocks(slides):
+        # Caller passed DOCX content blocks — convert to slides
+        log.info("Converting %d DOCX blocks to PPTX slides", len(slides))
+        slides = _docx_blocks_to_slides(slides)
+    else:
+        slides = validate_slides(slides)
 
     result = _create_presentation(
         slides_data=slides,
@@ -22,6 +138,7 @@ def export_pptx(slides: list[dict] | str, filename: str | None) -> FileRef:
 
     return FileRef(
         path=result["path"],
+        name=result["name"],
         url=result["url"],
     )
 
@@ -51,31 +168,25 @@ def _create_presentation(
     :param filename: Output filename (e.g., "report.pptx")
     :param folder_path: Optional output folder. If None, auto-generated.
     :param title: Title for the cover slide (default: empty)
+    :param template_path: Optional explicit path to a PPTX template file.
 
     :returns: dict with keys:
-            - 'url': Publicly accessible link (via `_public_url`)
+            - 'url': Publicly accessible link
             - 'path': Local filesystem path to saved .pptx
-    :raises: OSError: If saving fails.
+            - 'name': Safe filename (with extension)
+    :raises OSError: If saving fails.
     """
-    log = logging.getLogger(__name__)
-
     if folder_path is None:
-        folder_path = _generate_unique_folder()
+        folder_path = new_export_folder()
 
-    if filename:
-        filename = os.path.basename(filename)
-        filepath = os.path.join(folder_path, filename)
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        fname = filename
-    else:
-        filepath, fname = _generate_filename(folder_path, "pptx")
+    filepath, fname = resolve_output_path(folder_path, filename or "", "pptx")
 
     prs = None
     use_template = False
     title_layout = None
     content_layout = None
 
-    active_template = template_path or PPTX_TEMPLATE_PATH
+    active_template = template_path
 
     prs, use_template, title_layout, content_layout = _load_presentation_template(
         active_template, log
@@ -83,22 +194,24 @@ def _create_presentation(
     _add_title_slide(prs, title_layout, title, log)
     _add_content_slides(prs, slides_data, content_layout, use_template, log)
 
-    # === 5. Save and return ===
+    # === Save and return ===
     try:
         prs.save(filepath)
-        log.info(f"Saved presentation to: {filepath}")
+        log.info("Saved presentation to: %s", filepath)
         if use_template:
-            log.info(f"Template applied: {active_template}")
+            log.info("Template applied: %s", active_template)
         else:
             log.warning("No template used — default style applied")
     except Exception as e:
-        log.error(f"Failed to save presentation: {e}", exc_info=True)
+        log.error("Failed to save presentation: %s", e, exc_info=True)
         raise
 
     return {
-        "url": _public_url(folder_path, fname),
-        "path": filepath
+        "url": public_url(folder_path, fname),
+        "path": filepath,
+        "name": fname,
     }
+
 
 def _load_presentation_template(active_template, log):
     prs = None
@@ -170,6 +283,7 @@ def _load_presentation_template(active_template, log):
         content_layout = prs.slide_layouts[1] if len(prs.slide_layouts) > 1 else title_layout
     return prs, use_template, title_layout, content_layout
 
+
 def _add_title_slide(prs, title_layout, title, log):
     try:
         title_slide = prs.slides.add_slide(title_layout)
@@ -185,6 +299,7 @@ def _add_title_slide(prs, title_layout, title, log):
         title_slide = prs.slides.add_slide(prs.slide_layouts[0])
         if title_slide.shapes.title:
             title_slide.shapes.title.text = title or ""
+
 
 def _add_content_slides(prs, slides_data, content_layout, use_template, log):
     EMU_PER_INCH = 914400
@@ -313,4 +428,57 @@ def _add_content_slides(prs, slides_data, content_layout, use_template, log):
         except Exception as e:
             log.error(f"Failed to create slide {i + 1} ('{slide_title}'): {e}", exc_info=True)
             continue
-    
+
+
+def dynamic_font_size(content_list, max_chars=400, base_size=28, min_size=12):
+    """Pick a font size that scales down when a slide has a lot of text.
+
+    :param content_list: list of text lines for a slide.
+    :param max_chars: total character budget before shrinking starts.
+    :param base_size: font size (pt) when content is short.
+    :param min_size: floor font size (pt).
+    :return: a ``pptx.util.Pt`` value.
+    """
+    total_chars = sum(len(str(line)) for line in content_list)
+    ratio = total_chars / max_chars if max_chars > 0 else 1
+    if ratio <= 1:
+        return PptPt(base_size)
+    new_size = int(base_size / ratio)
+    return PptPt(max(min_size, new_size))
+
+
+def search_image(log, query: str) -> Optional[str]:
+    """Search for an image by a textual query.
+
+    Only Unsplash is supported (requires ``UNSPLASH_ACCESS_KEY``). When no
+    source is configured the query is skipped and ``None`` is returned —
+    image insertion is best-effort and must never break the export.
+
+    :param log: Logger instance.
+    :param query: Search query.
+    :return: Public image URL, or ``None`` when unavailable.
+    """
+    api_key = os.getenv("UNSPLASH_ACCESS_KEY")
+    if not api_key:
+        log.debug("UNSPLASH_ACCESS_KEY not set — image query '%s' skipped", query)
+        return None
+    url = "https://api.unsplash.com/search/photos"
+    params = {"query": query, "per_page": 1, "orientation": "landscape"}
+    headers = {"Authorization": f"Client-ID {api_key}"}
+    try:
+        resp = httpx.get(url, params=params, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results") or []
+        if results:
+            return results[0]["urls"]["regular"]
+    except Exception as e:
+        log.warning("Image search for '%s' failed: %s", query, e)
+    return None
+
+
+def download_bytes_sync(url: str, timeout: float = 30.0) -> bytes:
+    """Download *url* and return the response body as bytes (synchronous)."""
+    resp = httpx.get(url, timeout=timeout)
+    resp.raise_for_status()
+    return resp.content
