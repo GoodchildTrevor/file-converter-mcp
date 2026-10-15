@@ -1,17 +1,77 @@
 import asyncio
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from urllib.parse import quote
-import uvicorn
+import logging
 import os
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+logger = logging.getLogger("file_export_service")
+logging.basicConfig(level=logging.INFO)
 
 EXPORT_DIR_ENV = os.getenv("FILE_EXPORT_DIR")
 EXPORT_DIR = os.path.realpath((EXPORT_DIR_ENV or "/output").rstrip("/"))
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
-app = FastAPI()
+FILE_TTL_DAYS = float(os.getenv("FILE_TTL_DAYS", "7"))
+FILE_TTL_SECONDS = FILE_TTL_DAYS * 24 * 60 * 60
+
+CLEANUP_INTERVAL_SECONDS = float(os.getenv("FILE_CLEANUP_INTERVAL_SECONDS", str(6 * 60 * 60)))
+
+
+def cleanup_expired_files() -> None:
+    now = time.time()
+    removed_files = 0
+
+    for root, dirs, files in os.walk(EXPORT_DIR, topdown=False):
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            try:
+                mtime = os.path.getmtime(file_path)
+            except OSError:
+                continue
+
+            if now - mtime > FILE_TTL_SECONDS:
+                try:
+                    os.remove(file_path)
+                    removed_files += 1
+                except OSError as e:
+                    logger.warning("Failed to remove expired file %s: %s", file_path, e)
+
+        if root != EXPORT_DIR and not os.listdir(root):
+            try:
+                os.rmdir(root)
+            except OSError:
+                pass
+
+    if removed_files:
+        logger.info("Cleanup: removed %d expired file(s)", removed_files)
+
+
+async def cleanup_loop() -> None:
+    while True:
+        try:
+            cleanup_expired_files()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Cleanup loop error: %s", e)
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    task = asyncio.create_task(cleanup_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/files/{folder_name}/{filename}")
@@ -25,7 +85,6 @@ async def serve_file(folder_name: str, filename: str):
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Retry up to 5 seconds — volume sync between containers may lag
     for _ in range(10):
         if os.path.isfile(file_path):
             break
@@ -33,7 +92,6 @@ async def serve_file(folder_name: str, filename: str):
     else:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # RFC 5987: filename*=UTF-8''<percent-encoded> for non-ASCII names
     encoded = quote(filename, safe="")
     content_disposition = f"attachment; filename*=UTF-8''{encoded}"
 
@@ -46,5 +104,7 @@ async def serve_file(folder_name: str, filename: str):
 
 app.mount("/files", StaticFiles(directory=EXPORT_DIR), name="files")
 
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=9003)
+    
